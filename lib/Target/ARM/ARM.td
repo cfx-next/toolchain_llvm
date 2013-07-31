@@ -191,6 +191,7 @@ def ProcSwift   : SubtargetFeature<"swift", "ARMProcFamily", "Swift",
 def ProcA15      : SubtargetFeature<"a15", "ARMProcFamily", "CortexA15",
                                    "Cortex-A15 ARM processors",
                                    [FeatureT2XtPk, FeatureVFP4,
+                                    FeatureHWDiv, FeatureHWDivARM,
                                     FeatureAvoidPartialCPSR,
                                     FeatureTrustZone]>;
 def ProcR5      : SubtargetFeature<"r5", "ARMProcFamily", "CortexR5",
