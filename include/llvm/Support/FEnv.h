@@ -27,6 +27,11 @@
 #undef HAVE_FENV_H
 #endif
 
+// NDK fenv.h implementation has vmrs, vmsr that -msoft-float cannot compile.
+#if defined(__ANDROID__) && defined(__SOFTFP__)
+#undef HAVE_FENV_H
+#endif
+
 namespace llvm {
 namespace sys {
 
