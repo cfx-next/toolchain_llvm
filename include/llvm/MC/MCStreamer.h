@@ -290,6 +290,11 @@ public:
   /// used in an assignment.
   virtual void EmitLabel(MCSymbol *Symbol);
 
+  /// EmitTextLabel - Emit a label in text segment.
+  virtual void EmitTextLabel(MCSymbol *Symbol) {
+    EmitLabel(Symbol);
+  }
+
   virtual void EmitDebugLabel(MCSymbol *Symbol);
 
   virtual void EmitEHSymAttributes(const MCSymbol *Symbol, MCSymbol *EHSymbol);

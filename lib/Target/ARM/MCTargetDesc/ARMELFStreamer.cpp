@@ -83,6 +83,14 @@ public:
   virtual void EmitRegSave(const SmallVectorImpl<unsigned> &RegList,
                            bool isVector);
 
+  virtual void EmitTextLabel(MCSymbol *Symbol) {
+    if (IsThumb) {
+      MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
+      SD.setFlags(SD.getFlags() | ELF_Other_ThumbFunc);
+    }
+    MCELFStreamer::EmitLabel(Symbol);
+  }
+
   virtual void ChangeSection(const MCSection *Section,
                              const MCExpr *Subsection) {
     // We have to keep track of the mapping symbol state of any sections we
