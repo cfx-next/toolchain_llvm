@@ -35,33 +35,17 @@ SUB_CXXFLAGS := ${CPP.BaseFlags} ${CXX.Flags}
 # user to use libtool when linking against LLVM.
 SUB_LDFLAGS :=
 
-$(ObjDir)/BuildVariables.inc: $(BUILDVARIABLES_SRCPATH) Makefile $(ObjDir)/.dir
-	$(Echo) "Building llvm-config BuildVariables.inc file."
-	$(Verb) $(ECHO) 's/@LLVM_SRC_ROOT@/$(subst /,\/,$(LLVM_SRC_ROOT))/' \
-	  > temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_OBJ_ROOT@/$(subst /,\/,$(LLVM_OBJ_ROOT))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_CPPFLAGS@/$(subst /,\/,$(SUB_CPPFLAGS))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_CFLAGS@/$(subst /,\/,$(SUB_CFLAGS))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_CXXFLAGS@/$(subst /,\/,$(SUB_CXXFLAGS))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_LDFLAGS@/$(subst /,\/,$(SUB_LDFLAGS))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_BUILDMODE@/$(subst /,\/,$(BuildMode))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_SYSTEM_LIBS@/$(subst /,\/,$(LIBS))/' \
-	  >> temp.sed
-	$(Verb) $(ECHO) 's/@LLVM_TARGETS_BUILT@/$(subst /,\/,$(TARGETS_TO_BUILD))/' \
-	  >> temp.sed
-	$(Verb) $(SED) -f temp.sed < $< > $@
-	$(Verb) $(RM) temp.sed
+$(ObjDir)/BuildVariables.inc: $(BUILDVARIABLES_SRCPATH) Makefile Makefile.buildvars $(ObjDir)/.dir
+	$(Echo) "Making llvm-config $@ file."
+	$(MAKE) -f Makefile.buildvars CROSS_DEPTH=$(CROSS_DEPTH)
 
 # When cross-compiling, install a version of llvm-config that runs on the host.
 ifeq ($(LLVM_CROSS_COMPILING),1)
 install:: $(DESTDIR)$(PROJ_bindir)
 	$(Echo) Installing llvm-config-host
 	$(Verb) $(ProgInstall) $(BuildLLVMToolDir)/llvm-config \
-	  $(DESTDIR)$(PROJ_bindir)/$(program_prefix)llvm-config-host
+	  $(DESTDIR)$(PROJ_bindir)/$(program_prefix)llvm-config-build
+	$(Echo) Installing llvm-config-host
+	$(Verb) $(ProgInstall) $(BuildLLVMCrossToolDir)/llvm-config \
+		$(DESTDIR)$(PROJ_bindir)/$(program_prefix)llvm-config-host
 endif

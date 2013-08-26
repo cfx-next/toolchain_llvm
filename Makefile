@@ -104,8 +104,10 @@ ifeq ($(LLVM_CROSS_COMPILING),1)
 all:: cross-compile-build-tools
 
 clean::
-	$(Verb) rm -rf BuildTools
+	$(Verb) rm -rf BuildTools BuildToolsCross
 
+# BuildToolsCross is built the same as BuildTools except
+# that CROSS_DEPTH is ../ for BuildToolsCross
 cross-compile-build-tools:
 	$(Verb) if [ ! -f BuildTools/Makefile ]; then \
           $(MKDIR) BuildTools; \
@@ -134,6 +136,36 @@ cross-compile-build-tools:
 	  ENABLE_LIBCPP=$(ENABLE_LIBCPP) \
 	  CFLAGS= \
 	  CXXFLAGS= \
+	) || exit 1; \
+	if [ ! -f BuildToolsCross/Makefile ]; then \
+          $(MKDIR) BuildToolsCross; \
+	  cd BuildToolsCross ; \
+	  unset CFLAGS ; \
+	  unset CXXFLAGS ; \
+	  unset LDFLAGS ; \
+	  unset SDKROOT ; \
+	  unset UNIVERSAL_SDK_PATH ; \
+	  $(PROJ_SRC_DIR)/configure --build=$(BUILD_TRIPLE) \
+		--host=$(BUILD_TRIPLE) --target=$(BUILD_TRIPLE) \
+	        --disable-polly ; \
+	  cd .. ; \
+	fi; \
+	($(MAKE) -C BuildToolsCross \
+	  BUILD_DIRS_ONLY=1 \
+	  UNIVERSAL= \
+	  UNIVERSAL_SDK_PATH= \
+	  SDKROOT= \
+	  TARGET_NATIVE_ARCH="$(TARGET_NATIVE_ARCH)" \
+	  TARGETS_TO_BUILD="$(TARGETS_TO_BUILD)" \
+	  ENABLE_OPTIMIZED=$(ENABLE_OPTIMIZED) \
+	  ENABLE_PROFILING=$(ENABLE_PROFILING) \
+	  ENABLE_COVERAGE=$(ENABLE_COVERAGE) \
+	  DISABLE_ASSERTIONS=$(DISABLE_ASSERTIONS) \
+	  ENABLE_EXPENSIVE_CHECKS=$(ENABLE_EXPENSIVE_CHECKS) \
+	  ENABLE_LIBCPP=$(ENABLE_LIBCPP) \
+	  CFLAGS= \
+	  CXXFLAGS= \
+	  CROSS_DEPTH=../ \
 	) || exit 1;
 endif
 

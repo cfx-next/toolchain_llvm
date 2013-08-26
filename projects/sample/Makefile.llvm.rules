@@ -406,6 +406,7 @@ endif
 TargetMode :=
 ifeq ($(LLVM_CROSS_COMPILING),1)
   BuildLLVMToolDir := $(LLVM_OBJ_ROOT)/BuildTools/$(BuildMode)/bin
+  BuildLLVMCrossToolDir := $(LLVM_OBJ_ROOT)/BuildToolsCross/$(BuildMode)/bin
 endif
 
 ObjRootDir  := $(PROJ_OBJ_DIR)/$(BuildMode)

@@ -465,6 +465,7 @@ endif
 TargetMode :=
 ifeq ($(LLVM_CROSS_COMPILING),1)
   BuildLLVMToolDir := $(LLVM_OBJ_ROOT)/BuildTools/$(BuildMode)/bin
+  BuildLLVMCrossToolDir := $(LLVM_OBJ_ROOT)/BuildToolsCross/$(BuildMode)/bin
 endif
 
 ObjRootDir  := $(PROJ_OBJ_DIR)/$(BuildMode)
@@ -831,7 +832,7 @@ $(RecursiveTargets)::
 	  if ([ ! -f $$dir/Makefile ] || \
 	      command test $$dir/Makefile -ot $(PROJ_SRC_DIR)/$$dir/Makefile ); then \
 	    $(MKDIR) $$dir; \
-	    $(CP) $(PROJ_SRC_DIR)/$$dir/Makefile $$dir/Makefile; \
+	    $(CP) $(PROJ_SRC_DIR)/$$dir/Makefile* $$dir/; \
 	  fi; \
 	  ($(MAKE) -C $$dir $@ ) || exit 1; \
 	done
