@@ -462,10 +462,6 @@ void AsmPrinter::EmitFunctionHeader() {
     OutStreamer.EmitLabel(DeadBlockSyms[i]);
   }
 
-  // Emit the prefix data.
-  if (F->hasPrefixData())
-    EmitGlobalConstant(F->getPrefixData());
-
   // Emit pre-function debug and/or EH information.
   if (DE) {
     NamedRegionTimer T(EHTimerName, DWARFGroupName, TimePassesIsEnabled);
@@ -475,6 +471,10 @@ void AsmPrinter::EmitFunctionHeader() {
     NamedRegionTimer T(DbgTimerName, DWARFGroupName, TimePassesIsEnabled);
     DD->beginFunction(MF);
   }
+
+  // Emit the prefix data.
+  if (F->hasPrefixData())
+    EmitGlobalConstant(F->getPrefixData());
 }
 
 /// EmitFunctionEntryLabel - Emit the label that is the entrypoint for the
@@ -527,11 +527,11 @@ static void emitComments(const MachineInstr &MI, raw_ostream &CommentOS) {
 
 /// emitImplicitDef - This method emits the specified machine instruction
 /// that is an implicit def.
-static void emitImplicitDef(const MachineInstr *MI, AsmPrinter &AP) {
+void AsmPrinter::emitImplicitDef(const MachineInstr *MI) const {
   unsigned RegNo = MI->getOperand(0).getReg();
-  AP.OutStreamer.AddComment(Twine("implicit-def: ") +
-                            AP.TM.getRegisterInfo()->getName(RegNo));
-  AP.OutStreamer.AddBlankLine();
+  OutStreamer.AddComment(Twine("implicit-def: ") +
+                         TM.getRegisterInfo()->getName(RegNo));
+  OutStreamer.AddBlankLine();
 }
 
 static void emitKill(const MachineInstr *MI, AsmPrinter &AP) {
@@ -721,7 +721,7 @@ void AsmPrinter::EmitFunctionBody() {
         }
         break;
       case TargetOpcode::IMPLICIT_DEF:
-        if (isVerbose()) emitImplicitDef(II, *this);
+        if (isVerbose()) emitImplicitDef(II);
         break;
       case TargetOpcode::KILL:
         if (isVerbose()) emitKill(II, *this);
@@ -934,7 +934,7 @@ bool AsmPrinter::doFinalization(Module &M) {
 
       if (I->hasExternalLinkage() || !MAI->getWeakRefDirective())
         OutStreamer.EmitSymbolAttribute(Name, MCSA_Global);
-      else if (I->hasWeakLinkage())
+      else if (I->hasWeakLinkage() || I->hasLinkOnceLinkage())
         OutStreamer.EmitSymbolAttribute(Name, MCSA_WeakReference);
       else
         assert(I->hasLocalLinkage() && "Invalid alias linkage");
@@ -952,6 +952,9 @@ bool AsmPrinter::doFinalization(Module &M) {
   for (GCModuleInfo::iterator I = MI->end(), E = MI->begin(); I != E; )
     if (GCMetadataPrinter *MP = GetOrCreateGCPrinter(*--I))
       MP->finishAssembly(*this);
+
+  // Emit llvm.ident metadata in an '.ident' directive.
+  EmitModuleIdents(M);
 
   // If we don't have any trampolines, then we don't require stack memory
   // to be executable. Some targets have a directive to declare this.
@@ -1332,6 +1335,21 @@ void AsmPrinter::EmitXXStructorList(const Constant *List, bool isCtor) {
   }
 }
 
+void AsmPrinter::EmitModuleIdents(Module &M) {
+  if (!MAI->hasIdentDirective())
+    return;
+
+  if (const NamedMDNode *NMD = M.getNamedMetadata("llvm.ident")) {
+    for (unsigned i = 0, e = NMD->getNumOperands(); i != e; ++i) {
+      const MDNode *N = NMD->getOperand(i);
+      assert(N->getNumOperands() == 1 && 
+             "llvm.ident metadata entry can have only one operand");
+      const MDString *S = cast<MDString>(N->getOperand(0));
+      OutStreamer.EmitIdent(S->getString());
+    }
+  }
+}
+
 //===--------------------------------------------------------------------===//
 // Emission and print routines
 //
@@ -1495,7 +1513,7 @@ static const MCExpr *lowerConstant(const Constant *CV, AsmPrinter &AP) {
   case Instruction::GetElementPtr: {
     const DataLayout &DL = *AP.TM.getDataLayout();
     // Generate a symbolic expression for the byte address
-    APInt OffsetAI(DL.getPointerSizeInBits(), 0);
+    APInt OffsetAI(DL.getPointerTypeSizeInBits(CE->getType()), 0);
     cast<GEPOperator>(CE)->accumulateConstantOffset(DL, OffsetAI);
 
     const MCExpr *Base = lowerConstant(CE->getOperand(0), AP);
@@ -1521,7 +1539,7 @@ static const MCExpr *lowerConstant(const Constant *CV, AsmPrinter &AP) {
     // Handle casts to pointers by changing them into casts to the appropriate
     // integer type.  This promotes constant folding and simplifies this code.
     Constant *Op = CE->getOperand(0);
-    Op = ConstantExpr::getIntegerCast(Op, DL.getIntPtrType(CV->getContext()),
+    Op = ConstantExpr::getIntegerCast(Op, DL.getIntPtrType(CV->getType()),
                                       false/*ZExt*/);
     return lowerConstant(Op, AP);
   }

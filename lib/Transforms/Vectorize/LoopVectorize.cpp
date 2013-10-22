@@ -445,7 +445,7 @@ public:
     MRK_FloatMax
   };
 
-  /// This POD struct holds information about reduction variables.
+  /// This struct holds information about reduction variables.
   struct ReductionDescriptor {
     ReductionDescriptor() : StartValue(0), LoopExitInstr(0),
       Kind(RK_NoReduction), MinMaxKind(MRK_Invalid) {}
@@ -482,8 +482,8 @@ public:
     MinMaxReductionKind MinMaxKind;
   };
 
-  // This POD struct holds information about the memory runtime legality
-  // check that a group of pointers do not overlap.
+  /// This struct holds information about the memory runtime legality
+  /// check that a group of pointers do not overlap.
   struct RuntimePointerCheck {
     RuntimePointerCheck() : Need(false) {}
 
@@ -514,7 +514,7 @@ public:
     SmallVector<unsigned, 2> DependencySetId;
   };
 
-  /// A POD for saving information about induction variables.
+  /// A struct for saving information about induction variables.
   struct InductionInfo {
     InductionInfo(Value *Start, InductionKind K) : StartValue(Start), IK(K) {}
     InductionInfo() : StartValue(0), IK(IK_NoInduction) {}
@@ -1069,7 +1069,7 @@ Value *InnerLoopVectorizer::getConsecutiveVector(Value* Val, int StartIdx,
 int LoopVectorizationLegality::isConsecutivePtr(Value *Ptr) {
   assert(Ptr->getType()->isPointerTy() && "Unexpected non ptr");
   // Make sure that the pointer does not point to structs.
-  if (cast<PointerType>(Ptr->getType())->getElementType()->isAggregateType())
+  if (Ptr->getType()->getPointerElementType()->isAggregateType())
     return 0;
 
   // If this value is a pointer induction variable we know it is consecutive.
@@ -2745,18 +2745,16 @@ bool LoopVectorizationLegality::canVectorize() {
   if (!TheLoop->getExitingBlock())
     return false;
 
-  unsigned NumBlocks = TheLoop->getNumBlocks();
+  // We need to have a loop header.
+  DEBUG(dbgs() << "LV: Found a loop: " <<
+        TheLoop->getHeader()->getName() << '\n');
 
   // Check if we can if-convert non single-bb loops.
+  unsigned NumBlocks = TheLoop->getNumBlocks();
   if (NumBlocks != 1 && !canVectorizeWithIfConvert()) {
     DEBUG(dbgs() << "LV: Can't if-convert the loop.\n");
     return false;
   }
-
-  // We need to have a loop header.
-  BasicBlock *Latch = TheLoop->getLoopLatch();
-  DEBUG(dbgs() << "LV: Found a loop: " <<
-        TheLoop->getHeader()->getName() << '\n');
 
   // ScalarEvolution needs to be able to find the exit count.
   const SCEV *ExitCount = SE->getBackedgeTakenCount(TheLoop);
@@ -2766,6 +2764,7 @@ bool LoopVectorizationLegality::canVectorize() {
   }
 
   // Do not loop-vectorize loops with a tiny trip count.
+  BasicBlock *Latch = TheLoop->getLoopLatch();
   unsigned TC = SE->getSmallConstantTripCount(TheLoop, Latch);
   if (TC > 0u && TC < TinyTripCountVectorThreshold) {
     DEBUG(dbgs() << "LV: Found a loop with a very small trip count. " <<
@@ -4015,6 +4014,12 @@ bool LoopVectorizationLegality::AddReductionVar(PHINode *Phi,
         if (ExitInstruction != 0 || Cur == Phi)
           return false;
 
+        // The instruction used by an outside user must be the last instruction
+        // before we feed back to the reduction phi. Otherwise, we loose VF-1
+        // operations on the value.
+        if (std::find(Phi->op_begin(), Phi->op_end(), Cur) == Phi->op_end())
+         return false;
+
         ExitInstruction = Cur;
         continue;
       }
@@ -4858,7 +4863,10 @@ char LoopVectorize::ID = 0;
 static const char lv_name[] = "Loop Vectorization";
 INITIALIZE_PASS_BEGIN(LoopVectorize, LV_NAME, lv_name, false, false)
 INITIALIZE_AG_DEPENDENCY(TargetTransformInfo)
+INITIALIZE_PASS_DEPENDENCY(DominatorTree)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
+INITIALIZE_PASS_DEPENDENCY(LCSSA)
+INITIALIZE_PASS_DEPENDENCY(LoopInfo)
 INITIALIZE_PASS_DEPENDENCY(LoopSimplify)
 INITIALIZE_PASS_END(LoopVectorize, LV_NAME, lv_name, false, false)
 

@@ -570,14 +570,18 @@ public:
   /// otherwise it will assert.
   EVT getValueType(Type *Ty, bool AllowUnknown = false) const {
     // Lower scalar pointers to native pointer types.
-    if (Ty->isPointerTy()) return getPointerTy(Ty->getPointerAddressSpace());
+    if (PointerType *PTy = dyn_cast<PointerType>(Ty))
+      return getPointerTy(PTy->getAddressSpace());
 
     if (Ty->isVectorTy()) {
       VectorType *VTy = cast<VectorType>(Ty);
       Type *Elm = VTy->getElementType();
       // Lower vectors of pointers to native pointer types.
-      if (Elm->isPointerTy()) 
-        Elm = EVT(PointerTy).getTypeForEVT(Ty->getContext());
+      if (PointerType *PT = dyn_cast<PointerType>(Elm)) {
+        EVT PointerTy(getPointerTy(PT->getAddressSpace()));
+        Elm = PointerTy.getTypeForEVT(Ty->getContext());
+      }
+
       return EVT::getVectorVT(Ty->getContext(), EVT::getEVT(Elm, false),
                        VTy->getNumElements());
     }
@@ -1183,6 +1187,37 @@ public:
     return false;
   }
 
+  /// Return true if the target supplies and combines to a paired load
+  /// two loaded values of type LoadedType next to each other in memory.
+  /// RequiredAlignment gives the minimal alignment constraints that must be met
+  /// to be able to select this paired load.
+  ///
+  /// This information is *not* used to generate actual paired loads, but it is
+  /// used to generate a sequence of loads that is easier to combine into a
+  /// paired load.
+  /// For instance, something like this:
+  /// a = load i64* addr
+  /// b = trunc i64 a to i32
+  /// c = lshr i64 a, 32
+  /// d = trunc i64 c to i32
+  /// will be optimized into:
+  /// b = load i32* addr1
+  /// d = load i32* addr2
+  /// Where addr1 = addr2 +/- sizeof(i32).
+  ///
+  /// In other words, unless the target performs a post-isel load combining,
+  /// this information should not be provided because it will generate more
+  /// loads.
+  virtual bool hasPairedLoad(Type * /*LoadedType*/,
+                             unsigned & /*RequiredAligment*/) const {
+    return false;
+  }
+
+  virtual bool hasPairedLoad(EVT /*LoadedType*/,
+                             unsigned & /*RequiredAligment*/) const {
+    return false;
+  }
+
   /// Return true if zero-extending the specific node Val to type VT2 is free
   /// (either because it's implicitly zero-extended such as ARM ldrb / ldrh or
   /// because it's folded such as X86 zero-extending loads).
@@ -1263,10 +1298,6 @@ private:
   const TargetMachine &TM;
   const DataLayout *TD;
   const TargetLoweringObjectFile &TLOF;
-
-  /// The type to use for pointers for the default address space, usually i32 or
-  /// i64.
-  MVT PointerTy;
 
   /// True if this is a little endian target.
   bool IsLittleEndian;
@@ -1473,10 +1504,12 @@ public:
     if (NumElts == 1)
       return LegalizeKind(TypeScalarizeVector, EltVT);
 
-    // Try to widen vector elements until a legal type is found.
+    // Try to widen vector elements until the element type is a power of two and
+    // promote it to a legal type later on, for example:
+    // <3 x i8> -> <4 x i8> -> <4 x i32>
     if (EltVT.isInteger()) {
       // Vectors with a number of elements that is not a power of two are always
-      // widened, for example <3 x float> -> <4 x float>.
+      // widened, for example <3 x i8> -> <4 x i8>.
       if (!VT.isPow2VectorType()) {
         NumElts = (unsigned)NextPowerOf2(NumElts);
         EVT NVT = EVT::getVectorVT(Context, EltVT, NumElts);
@@ -1505,7 +1538,8 @@ public:
 
         // Stop trying when getting a non-simple element type.
         // Note that vector elements may be greater than legal vector element
-        // types. Example: X86 XMM registers hold 64bit element on 32bit systems.
+        // types. Example: X86 XMM registers hold 64bit element on 32bit
+        // systems.
         if (!EltVT.isSimple()) break;
 
         // Build a new vector type and check if it is legal.
@@ -1666,7 +1700,8 @@ public:
   /// by reference if this node can be combined with a load / store to form a
   /// post-indexed load / store.
   virtual bool getPostIndexedAddressParts(SDNode * /*N*/, SDNode * /*Op*/,
-                                          SDValue &/*Base*/, SDValue &/*Offset*/,
+                                          SDValue &/*Base*/,
+                                          SDValue &/*Offset*/,
                                           ISD::MemIndexedMode &/*AM*/,
                                           SelectionDAG &/*DAG*/) const {
     return false;

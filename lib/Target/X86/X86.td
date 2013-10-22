@@ -68,7 +68,7 @@ def Feature3DNowA  : SubtargetFeature<"3dnowa", "X863DNowLevel", "ThreeDNowA",
 def Feature64Bit   : SubtargetFeature<"64bit", "HasX86_64", "true",
                                       "Support 64-bit instructions",
                                       [FeatureCMOV]>;
-def FeatureCMPXCHG16B : SubtargetFeature<"cmpxchg16b", "HasCmpxchg16b", "true",
+def FeatureCMPXCHG16B : SubtargetFeature<"cx16", "HasCmpxchg16b", "true",
                                       "64-bit with cmpxchg16b",
                                       [Feature64Bit]>;
 def FeatureSlowBTMem : SubtargetFeature<"slow-bt-mem", "IsBTMemSlow", "true",
@@ -292,19 +292,19 @@ def : Proc<"amdfam10",        [FeatureSSE4A,
                                FeaturePOPCNT, FeatureSlowBTMem]>;
 // Bobcat
 def : Proc<"btver1",          [FeatureSSSE3, FeatureSSE4A, FeatureCMPXCHG16B,
-                               FeatureLZCNT, FeaturePOPCNT]>;
+                               FeaturePRFCHW, FeatureLZCNT, FeaturePOPCNT]>;
 // Jaguar
 def : Proc<"btver2",          [FeatureAVX, FeatureSSE4A, FeatureCMPXCHG16B,
-                               FeatureAES, FeaturePCLMUL, FeatureBMI,
-                               FeatureF16C, FeatureMOVBE, FeatureLZCNT,
-                               FeaturePOPCNT]>;
+                               FeaturePRFCHW, FeatureAES, FeaturePCLMUL,
+                               FeatureBMI, FeatureF16C, FeatureMOVBE,
+                               FeatureLZCNT, FeaturePOPCNT]>;
 // Bulldozer
 def : Proc<"bdver1",          [FeatureXOP, FeatureFMA4, FeatureCMPXCHG16B,
-                               FeatureAES, FeaturePCLMUL,
+                               FeatureAES, FeaturePRFCHW, FeaturePCLMUL,
                                FeatureLZCNT, FeaturePOPCNT]>;
 // Piledriver
 def : Proc<"bdver2",          [FeatureXOP, FeatureFMA4, FeatureCMPXCHG16B,
-                               FeatureAES, FeaturePCLMUL,
+                               FeatureAES, FeaturePRFCHW, FeaturePCLMUL,
                                FeatureF16C, FeatureLZCNT,
                                FeaturePOPCNT, FeatureBMI,  FeatureTBM,
                                FeatureFMA]>;

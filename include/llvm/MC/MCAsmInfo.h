@@ -156,6 +156,10 @@ namespace llvm {
     /// symbol names.  This defaults to true.
     bool AllowPeriodsInName;
 
+    /// \brief This is true if the assembler allows @ characters in symbol
+    /// names. Defaults to false.
+    bool AllowAtInName;
+
     /// AllowUTF8 - This is true if the assembler accepts UTF-8 input.
     // FIXME: Make this a more general encoding setting?
     bool AllowUTF8;
@@ -270,6 +274,10 @@ namespace llvm {
     /// HasSingleParameterDotFile - True if the target has a single parameter
     /// .file directive, this is true for ELF targets.
     bool HasSingleParameterDotFile;          // Defaults to true.
+
+    /// hasIdentDirective - True if the target has a .ident directive, this is
+    /// true for ELF targets.
+    bool HasIdentDirective;                  // Defaults to false.
 
     /// HasNoDeadStrip - True if this target supports the MachO .no_dead_strip
     /// directive.
@@ -481,6 +489,9 @@ namespace llvm {
     bool doesAllowPeriodsInName() const {
       return AllowPeriodsInName;
     }
+    bool doesAllowAtInName() const {
+      return AllowAtInName;
+    }
     bool doesAllowUTF8() const {
       return AllowUTF8;
     }
@@ -523,6 +534,7 @@ namespace llvm {
     }
     bool hasDotTypeDotSizeDirective() const {return HasDotTypeDotSizeDirective;}
     bool hasSingleParameterDotFile() const { return HasSingleParameterDotFile; }
+    bool hasIdentDirective() const { return HasIdentDirective; }
     bool hasNoDeadStrip() const { return HasNoDeadStrip; }
     bool hasSymbolResolver() const { return HasSymbolResolver; }
     const char *getWeakRefDirective() const { return WeakRefDirective; }

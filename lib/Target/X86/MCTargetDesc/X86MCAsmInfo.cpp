@@ -90,7 +90,6 @@ X86ELFMCAsmInfo::X86ELFMCAsmInfo(const Triple &T) {
   TextAlignFillValue = 0x90;
 
   PrivateGlobalPrefix = ".L";
-  WeakRefDirective = "\t.weak\t";
 
   // Set up DWARF directives
   HasLEB128 = true;  // Target asm supports leb128 directives (little-endian)
@@ -136,6 +135,8 @@ X86MCAsmInfoMicrosoft::X86MCAsmInfoMicrosoft(const Triple &Triple) {
   AssemblerDialect = AsmWriterFlavor;
 
   TextAlignFillValue = 0x90;
+
+  AllowAtInName = true;
 }
 
 void X86MCAsmInfoGNUCOFF::anchor() { }

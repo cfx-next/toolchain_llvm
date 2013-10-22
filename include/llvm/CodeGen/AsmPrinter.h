@@ -286,6 +286,10 @@ namespace llvm {
     virtual bool
     isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB) const;
 
+    /// emitImplicitDef - Targets can override this to customize the output of
+    /// IMPLICIT_DEF instructions in verbose mode.
+    virtual void emitImplicitDef(const MachineInstr *MI) const;
+
     //===------------------------------------------------------------------===//
     // Symbol Lowering Routines.
     //===------------------------------------------------------------------===//
@@ -487,6 +491,8 @@ namespace llvm {
                             const MachineBasicBlock *MBB,
                             unsigned uid) const;
     void EmitLLVMUsedList(const ConstantArray *InitList);
+    /// Emit llvm.ident metadata in an '.ident' directive.
+    void EmitModuleIdents(Module &M);
     void EmitXXStructorList(const Constant *List, bool isCtor);
     GCMetadataPrinter *GetOrCreateGCPrinter(GCStrategy *C);
   };

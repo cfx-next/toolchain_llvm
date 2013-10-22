@@ -88,6 +88,20 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     }
     break;
   }
+  case 'o':
+    // We only need to change the name to match the mangling including the
+    // address space.
+    if (F->arg_size() == 2 && Name.startswith("objectsize.")) {
+      Type *Tys[2] = { F->getReturnType(), F->arg_begin()->getType() };
+      if (F->getName() != Intrinsic::getName(Intrinsic::objectsize, Tys)) {
+        F->setName(Name + ".old");
+        NewFn = Intrinsic::getDeclaration(F->getParent(),
+                                          Intrinsic::objectsize, Tys);
+        return true;
+      }
+    }
+    break;
+
   case 'x': {
     if (Name.startswith("x86.sse2.pcmpeq.") ||
         Name.startswith("x86.sse2.pcmpgt.") ||
@@ -97,6 +111,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
         Name == "x86.avx.movnt.dq.256" ||
         Name == "x86.avx.movnt.pd.256" ||
         Name == "x86.avx.movnt.ps.256" ||
+        Name == "x86.sse42.crc32.64.8" ||
         (Name.startswith("x86.xop.vpcom") && F->arg_size() == 2)) {
       NewFn = 0;
       return true;
@@ -257,6 +272,12 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
       Function *VPCOM = Intrinsic::getDeclaration(F->getParent(), intID);
       Rep = Builder.CreateCall3(VPCOM, CI->getArgOperand(0),
                                 CI->getArgOperand(1), Builder.getInt8(Imm));
+    } else if (Name == "llvm.x86.sse42.crc32.64.8") {
+      Function *CRC32 = Intrinsic::getDeclaration(F->getParent(),
+                                               Intrinsic::x86_sse42_crc32_32_8);
+      Value *Trunc0 = Builder.CreateTrunc(CI->getArgOperand(0), Type::getInt32Ty(C));
+      Rep = Builder.CreateCall2(CRC32, Trunc0, CI->getArgOperand(1));
+      Rep = Builder.CreateZExt(Rep, CI->getType(), "");
     } else {
       bool PD128 = false, PD256 = false, PS128 = false, PS256 = false;
       if (Name == "llvm.x86.avx.vpermil.pd.256")
@@ -314,6 +335,14 @@ void llvm::UpgradeIntrinsicCall(CallInst *CI, Function *NewFn) {
            "Mismatch between function args and call args");
     CI->replaceAllUsesWith(Builder.CreateCall2(NewFn, CI->getArgOperand(0),
                                                Builder.getFalse(), Name));
+    CI->eraseFromParent();
+    return;
+
+  case Intrinsic::objectsize:
+    CI->replaceAllUsesWith(Builder.CreateCall2(NewFn,
+                                               CI->getArgOperand(0),
+                                               CI->getArgOperand(1),
+                                               Name));
     CI->eraseFromParent();
     return;
 

@@ -39,6 +39,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLibraryInfo.h"
+#include "llvm/Transforms/Utils/GlobalStatus.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <algorithm>
 using namespace llvm;
@@ -51,6 +52,7 @@ STATISTIC(NumSubstitute,"Number of globals with initializers stored into them");
 STATISTIC(NumDeleted   , "Number of globals deleted");
 STATISTIC(NumFnDeleted , "Number of functions deleted");
 STATISTIC(NumGlobUses  , "Number of global uses devirtualized");
+STATISTIC(NumLocalized , "Number of globals localized");
 STATISTIC(NumShrunkToBool  , "Number of global vars shrunk to booleans");
 STATISTIC(NumFastCallFns   , "Number of functions converted to fastcc");
 STATISTIC(NumCtorsEvaluated, "Number of static ctors evaluated");
@@ -66,7 +68,6 @@ static cl::opt<bool> DisableGlobalCtorConstPromotion(
   cl::Hidden);
 
 namespace {
-  struct GlobalStatus;
   struct GlobalOpt : public ModulePass {
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.addRequired<TargetLibraryInfo>();
@@ -105,182 +106,8 @@ ModulePass *llvm::createGlobalOptimizerPass() { return new GlobalOpt(); }
 
 namespace {
 
-/// GlobalStatus - As we analyze each global, keep track of some information
-/// about it.  If we find out that the address of the global is taken, none of
-/// this info will be accurate.
-struct GlobalStatus {
-  /// isCompared - True if the global's address is used in a comparison.
-  bool isCompared;
-
-  /// isLoaded - True if the global is ever loaded.  If the global isn't ever
-  /// loaded it can be deleted.
-  bool isLoaded;
-
-  /// StoredType - Keep track of what stores to the global look like.
-  ///
-  enum StoredType {
-    /// NotStored - There is no store to this global.  It can thus be marked
-    /// constant.
-    NotStored,
-
-    /// isInitializerStored - This global is stored to, but the only thing
-    /// stored is the constant it was initialized with.  This is only tracked
-    /// for scalar globals.
-    isInitializerStored,
-
-    /// isStoredOnce - This global is stored to, but only its initializer and
-    /// one other value is ever stored to it.  If this global isStoredOnce, we
-    /// track the value stored to it in StoredOnceValue below.  This is only
-    /// tracked for scalar globals.
-    isStoredOnce,
-
-    /// isStored - This global is stored to by multiple values or something else
-    /// that we cannot track.
-    isStored
-  } StoredType;
-
-  /// StoredOnceValue - If only one value (besides the initializer constant) is
-  /// ever stored to this global, keep track of what value it is.
-  Value *StoredOnceValue;
-
-  /// AtomicOrdering - Set to the strongest atomic ordering requirement.
-  AtomicOrdering Ordering;
-
-  GlobalStatus()
-      : isCompared(false), isLoaded(false), StoredType(NotStored),
-        StoredOnceValue(0), Ordering(NotAtomic) {}
-};
-
-}
-
-/// StrongerOrdering - Return the stronger of the two ordering. If the two
-/// orderings are acquire and release, then return AcquireRelease.
-///
-static AtomicOrdering StrongerOrdering(AtomicOrdering X, AtomicOrdering Y) {
-  if (X == Acquire && Y == Release) return AcquireRelease;
-  if (Y == Acquire && X == Release) return AcquireRelease;
-  return (AtomicOrdering)std::max(X, Y);
-}
-
-/// SafeToDestroyConstant - It is safe to destroy a constant iff it is only used
-/// by constants itself.  Note that constants cannot be cyclic, so this test is
-/// pretty easy to implement recursively.
-///
-static bool SafeToDestroyConstant(const Constant *C) {
-  if (isa<GlobalValue>(C)) return false;
-
-  for (Value::const_use_iterator UI = C->use_begin(), E = C->use_end(); UI != E;
-       ++UI)
-    if (const Constant *CU = dyn_cast<Constant>(*UI)) {
-      if (!SafeToDestroyConstant(CU)) return false;
-    } else
-      return false;
-  return true;
-}
 
 
-/// AnalyzeGlobal - Look at all uses of the global and fill in the GlobalStatus
-/// structure.  If the global has its address taken, return true to indicate we
-/// can't do anything with it.
-///
-static bool AnalyzeGlobal(const Value *V, GlobalStatus &GS,
-                          SmallPtrSet<const PHINode*, 16> &PHIUsers) {
-  for (Value::const_use_iterator UI = V->use_begin(), E = V->use_end(); UI != E;
-       ++UI) {
-    const User *U = *UI;
-    if (const ConstantExpr *CE = dyn_cast<ConstantExpr>(U)) {
-      // If the result of the constantexpr isn't pointer type, then we won't
-      // know to expect it in various places.  Just reject early.
-      if (!isa<PointerType>(CE->getType())) return true;
-
-      if (AnalyzeGlobal(CE, GS, PHIUsers)) return true;
-    } else if (const Instruction *I = dyn_cast<Instruction>(U)) {
-      if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        GS.isLoaded = true;
-        // Don't hack on volatile loads.
-        if (LI->isVolatile()) return true;
-        GS.Ordering = StrongerOrdering(GS.Ordering, LI->getOrdering());
-      } else if (const StoreInst *SI = dyn_cast<StoreInst>(I)) {
-        // Don't allow a store OF the address, only stores TO the address.
-        if (SI->getOperand(0) == V) return true;
-
-        // Don't hack on volatile stores.
-        if (SI->isVolatile()) return true;
-
-        GS.Ordering = StrongerOrdering(GS.Ordering, SI->getOrdering());
-
-        // If this is a direct store to the global (i.e., the global is a scalar
-        // value, not an aggregate), keep more specific information about
-        // stores.
-        if (GS.StoredType != GlobalStatus::isStored) {
-          if (const GlobalVariable *GV = dyn_cast<GlobalVariable>(
-                                                           SI->getOperand(1))) {
-            Value *StoredVal = SI->getOperand(0);
-
-            if (Constant *C = dyn_cast<Constant>(StoredVal)) {
-              if (C->isThreadDependent()) {
-                // The stored value changes between threads; don't track it.
-                return true;
-              }
-            }
-
-            if (StoredVal == GV->getInitializer()) {
-              if (GS.StoredType < GlobalStatus::isInitializerStored)
-                GS.StoredType = GlobalStatus::isInitializerStored;
-            } else if (isa<LoadInst>(StoredVal) &&
-                       cast<LoadInst>(StoredVal)->getOperand(0) == GV) {
-              if (GS.StoredType < GlobalStatus::isInitializerStored)
-                GS.StoredType = GlobalStatus::isInitializerStored;
-            } else if (GS.StoredType < GlobalStatus::isStoredOnce) {
-              GS.StoredType = GlobalStatus::isStoredOnce;
-              GS.StoredOnceValue = StoredVal;
-            } else if (GS.StoredType == GlobalStatus::isStoredOnce &&
-                       GS.StoredOnceValue == StoredVal) {
-              // noop.
-            } else {
-              GS.StoredType = GlobalStatus::isStored;
-            }
-          } else {
-            GS.StoredType = GlobalStatus::isStored;
-          }
-        }
-      } else if (isa<BitCastInst>(I)) {
-        if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
-      } else if (isa<GetElementPtrInst>(I)) {
-        if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
-      } else if (isa<SelectInst>(I)) {
-        if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
-      } else if (const PHINode *PN = dyn_cast<PHINode>(I)) {
-        // PHI nodes we can check just like select or GEP instructions, but we
-        // have to be careful about infinite recursion.
-        if (PHIUsers.insert(PN))  // Not already visited.
-          if (AnalyzeGlobal(I, GS, PHIUsers)) return true;
-      } else if (isa<CmpInst>(I)) {
-        GS.isCompared = true;
-      } else if (const MemTransferInst *MTI = dyn_cast<MemTransferInst>(I)) {
-        if (MTI->isVolatile()) return true;
-        if (MTI->getArgOperand(0) == V)
-          GS.StoredType = GlobalStatus::isStored;
-        if (MTI->getArgOperand(1) == V)
-          GS.isLoaded = true;
-      } else if (const MemSetInst *MSI = dyn_cast<MemSetInst>(I)) {
-        assert(MSI->getArgOperand(0) == V && "Memset only takes one pointer!");
-        if (MSI->isVolatile()) return true;
-        GS.StoredType = GlobalStatus::isStored;
-      } else {
-        return true;  // Any other non-load instruction might take address!
-      }
-    } else if (const Constant *C = dyn_cast<Constant>(U)) {
-      // We might have a dead and dangling constant hanging off of here.
-      if (!SafeToDestroyConstant(C))
-        return true;
-    } else {
-      // Otherwise must be some other user.
-      return true;
-    }
-  }
-
-  return false;
 }
 
 /// isLeakCheckerRoot - Is this global variable possibly used by a leak checker
@@ -416,7 +243,7 @@ static bool CleanupPointerRootUsers(GlobalVariable *GV,
         Changed = true;
       }
     } else if (Constant *C = dyn_cast<Constant>(U)) {
-      if (SafeToDestroyConstant(C)) {
+      if (isSafeToDestroyConstant(C)) {
         C->destroyConstant();
         // This could have invalidated UI, start over from scratch.
         Dead.clear();
@@ -516,7 +343,7 @@ static bool CleanupConstantGlobalUsers(Value *V, Constant *Init,
     } else if (Constant *C = dyn_cast<Constant>(U)) {
       // If we have a chain of dead constantexprs or other things dangling from
       // us, and if they are all dead, nuke them without remorse.
-      if (SafeToDestroyConstant(C)) {
+      if (isSafeToDestroyConstant(C)) {
         C->destroyConstant();
         CleanupConstantGlobalUsers(V, Init, TD, TLI);
         return true;
@@ -531,7 +358,7 @@ static bool CleanupConstantGlobalUsers(Value *V, Constant *Init,
 static bool isSafeSROAElementUse(Value *V) {
   // We might have a dead and dangling constant hanging off of here.
   if (Constant *C = dyn_cast<Constant>(V))
-    return SafeToDestroyConstant(C);
+    return isSafeToDestroyConstant(C);
 
   Instruction *I = dyn_cast<Instruction>(V);
   if (!I) return false;
@@ -1355,8 +1182,7 @@ static Value *GetHeapSROAValue(Value *V, unsigned FieldNo,
   } else if (PHINode *PN = dyn_cast<PHINode>(V)) {
     // PN's type is pointer to struct.  Make a new PHI of pointer to struct
     // field.
-    StructType *ST =
-      cast<StructType>(cast<PointerType>(PN->getType())->getElementType());
+    StructType *ST = cast<StructType>(PN->getType()->getPointerElementType());
 
     PHINode *NewPN =
      PHINode::Create(PointerType::getUnqual(ST->getElementType(FieldNo)),
@@ -1899,13 +1725,12 @@ bool GlobalOpt::ProcessGlobal(GlobalVariable *GV,
   if (!GV->hasLocalLinkage())
     return false;
 
-  SmallPtrSet<const PHINode*, 16> PHIUsers;
   GlobalStatus GS;
 
-  if (AnalyzeGlobal(GV, GS, PHIUsers))
+  if (GlobalStatus::analyzeGlobal(GV, GS))
     return false;
 
-  if (!GS.isCompared && !GV->hasUnnamedAddr()) {
+  if (!GS.IsCompared && !GV->hasUnnamedAddr()) {
     GV->setUnnamedAddr(true);
     NumUnnamed++;
   }
@@ -1921,9 +1746,38 @@ bool GlobalOpt::ProcessGlobal(GlobalVariable *GV,
 bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
                                       Module::global_iterator &GVI,
                                       const GlobalStatus &GS) {
+  // If this is a first class global and has only one accessing function
+  // and this function is main (which we know is not recursive), we replace
+  // the global with a local alloca in this function.
+  //
+  // NOTE: It doesn't make sense to promote non single-value types since we
+  // are just replacing static memory to stack memory.
+  //
+  // If the global is in different address space, don't bring it to stack.
+  if (!GS.HasMultipleAccessingFunctions &&
+      GS.AccessingFunction && !GS.HasNonInstructionUser &&
+      GV->getType()->getElementType()->isSingleValueType() &&
+      GS.AccessingFunction->getName() == "main" &&
+      GS.AccessingFunction->hasExternalLinkage() &&
+      GV->getType()->getAddressSpace() == 0) {
+    DEBUG(dbgs() << "LOCALIZING GLOBAL: " << *GV);
+    Instruction &FirstI = const_cast<Instruction&>(*GS.AccessingFunction
+                                                   ->getEntryBlock().begin());
+    Type *ElemTy = GV->getType()->getElementType();
+    // FIXME: Pass Global's alignment when globals have alignment
+    AllocaInst *Alloca = new AllocaInst(ElemTy, NULL, GV->getName(), &FirstI);
+    if (!isa<UndefValue>(GV->getInitializer()))
+      new StoreInst(GV->getInitializer(), Alloca, &FirstI);
+
+    GV->replaceAllUsesWith(Alloca);
+    GV->eraseFromParent();
+    ++NumLocalized;
+    return true;
+  }
+
   // If the global is never loaded (but may be stored to), it is dead.
   // Delete it now.
-  if (!GS.isLoaded) {
+  if (!GS.IsLoaded) {
     DEBUG(dbgs() << "GLOBAL NEVER LOADED: " << *GV);
 
     bool Changed;
@@ -1944,7 +1798,7 @@ bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
     }
     return Changed;
 
-  } else if (GS.StoredType <= GlobalStatus::isInitializerStored) {
+  } else if (GS.StoredType <= GlobalStatus::InitializerStored) {
     DEBUG(dbgs() << "MARKING CONSTANT: " << *GV << "\n");
     GV->setConstant(true);
 
@@ -1967,7 +1821,7 @@ bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
         GVI = FirstNewGV;  // Don't skip the newly produced globals!
         return true;
       }
-  } else if (GS.StoredType == GlobalStatus::isStoredOnce) {
+  } else if (GS.StoredType == GlobalStatus::StoredOnce) {
     // If the initial value for the global was an undef value, and if only
     // one other value was stored into it, we can just change the
     // initializer to be the stored value, then delete all stores to the
@@ -2165,8 +2019,7 @@ static GlobalVariable *InstallGlobalCtors(GlobalVariable *GCL,
   CSVals[1] = 0;
 
   StructType *StructTy =
-    cast <StructType>(
-    cast<ArrayType>(GCL->getType()->getElementType())->getElementType());
+    cast<StructType>(GCL->getType()->getElementType()->getArrayElementType());
 
   // Create the new init list.
   std::vector<Constant*> CAList;

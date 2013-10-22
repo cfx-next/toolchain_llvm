@@ -53,14 +53,14 @@ bool RegAllocNilUsed = true;
 #define DEPOTNAME "__local_depot"
 
 static cl::opt<bool>
-EmitLineNumbers("nvptx-emit-line-numbers",
+EmitLineNumbers("nvptx-emit-line-numbers", cl::Hidden,
                 cl::desc("NVPTX Specific: Emit Line numbers even without -G"),
                 cl::init(true));
 
 namespace llvm { bool InterleaveSrcInPtx = false; }
 
 static cl::opt<bool, true>
-InterleaveSrc("nvptx-emit-src", cl::ZeroOrMore,
+InterleaveSrc("nvptx-emit-src", cl::ZeroOrMore, cl::Hidden,
               cl::desc("NVPTX Specific: Emit source line in ptx file"),
               cl::location(llvm::InterleaveSrcInPtx));
 
@@ -551,6 +551,19 @@ void NVPTXAsmPrinter::EmitFunctionBodyEnd() {
   VRegMapping.clear();
 }
 
+void NVPTXAsmPrinter::emitImplicitDef(const MachineInstr *MI) const {
+  unsigned RegNo = MI->getOperand(0).getReg();
+  const TargetRegisterInfo *TRI = TM.getRegisterInfo();
+  if (TRI->isVirtualRegister(RegNo)) {
+    OutStreamer.AddComment(Twine("implicit-def: ") +
+                           getVirtualRegisterName(RegNo));
+  } else {
+    OutStreamer.AddComment(Twine("implicit-def: ") +
+                           TM.getRegisterInfo()->getName(RegNo));
+  }
+  OutStreamer.AddBlankLine();
+}
+
 void NVPTXAsmPrinter::emitKernelFunctionDirectives(const Function &F,
                                                    raw_ostream &O) const {
   // If the NVVM IR has some of reqntid* specified, then output
@@ -602,23 +615,30 @@ void NVPTXAsmPrinter::emitKernelFunctionDirectives(const Function &F,
     O << ".minnctapersm " << mincta << "\n";
 }
 
-void NVPTXAsmPrinter::getVirtualRegisterName(unsigned vr, bool isVec,
-                                             raw_ostream &O) {
-  const TargetRegisterClass *RC = MRI->getRegClass(vr);
+std::string
+NVPTXAsmPrinter::getVirtualRegisterName(unsigned Reg) const {
+  const TargetRegisterClass *RC = MRI->getRegClass(Reg);
 
-  DenseMap<unsigned, unsigned> &regmap = VRegMapping[RC];
-  unsigned mapped_vr = regmap[vr];
+  std::string Name;
+  raw_string_ostream NameStr(Name);
 
-  if (!isVec) {
-    O << getNVPTXRegClassStr(RC) << mapped_vr;
-    return;
-  }
-  report_fatal_error("Bad register!");
+  VRegRCMap::const_iterator I = VRegMapping.find(RC);
+  assert(I != VRegMapping.end() && "Bad register class");
+  const DenseMap<unsigned, unsigned> &RegMap = I->second;
+
+  VRegMap::const_iterator VI = RegMap.find(Reg);
+  assert(VI != RegMap.end() && "Bad virtual register");
+  unsigned MappedVR = VI->second;
+
+  NameStr << getNVPTXRegClassStr(RC) << MappedVR;
+
+  NameStr.flush();
+  return Name;
 }
 
-void NVPTXAsmPrinter::emitVirtualRegister(unsigned int vr, bool isVec,
+void NVPTXAsmPrinter::emitVirtualRegister(unsigned int vr,
                                           raw_ostream &O) {
-  getVirtualRegisterName(vr, isVec, O);
+  O << getVirtualRegisterName(vr);
 }
 
 void NVPTXAsmPrinter::printVecModifiedImmediate(
@@ -2041,7 +2061,7 @@ void NVPTXAsmPrinter::printOperand(const MachineInstr *MI, int opNum,
       else
         O << NVPTXInstPrinter::getRegisterName(MO.getReg());
     } else {
-      emitVirtualRegister(MO.getReg(), false, O);
+      emitVirtualRegister(MO.getReg(), O);
     }
     return;
 

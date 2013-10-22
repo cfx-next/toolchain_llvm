@@ -19,6 +19,7 @@
 #include "RuntimeDyldMachO.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Support/MutexGuard.h"
 #include "llvm/Object/ELF.h"
 
 using namespace llvm;
@@ -29,12 +30,16 @@ RuntimeDyldImpl::~RuntimeDyldImpl() {}
 
 namespace llvm {
 
-StringRef RuntimeDyldImpl::getEHFrameSection() {
-  return StringRef();
+void RuntimeDyldImpl::registerEHFrames() {
+}
+
+void RuntimeDyldImpl::deregisterEHFrames() {
 }
 
 // Resolve the relocations for all symbols we currently know about.
 void RuntimeDyldImpl::resolveRelocations() {
+  MutexGuard locked(lock);
+
   // First, resolve relocations associated with external symbols.
   resolveExternalSymbols();
 
@@ -55,6 +60,7 @@ void RuntimeDyldImpl::resolveRelocations() {
 
 void RuntimeDyldImpl::mapSectionAddress(const void *LocalAddress,
                                         uint64_t TargetAddress) {
+  MutexGuard locked(lock);
   for (unsigned i = 0, e = Sections.size(); i != e; ++i) {
     if (Sections[i].Address == LocalAddress) {
       reassignSectionAddress(i, TargetAddress);
@@ -71,11 +77,15 @@ ObjectImage *RuntimeDyldImpl::createObjectImage(ObjectBuffer *InputBuffer) {
 }
 
 ObjectImage *RuntimeDyldImpl::loadObject(ObjectBuffer *InputBuffer) {
+  MutexGuard locked(lock);
+
   OwningPtr<ObjectImage> obj(createObjectImage(InputBuffer));
   if (!obj)
     report_fatal_error("Unable to create object image from memory buffer!");
 
+  // Save information about our target
   Arch = (Triple::ArchType)obj->getArch();
+  IsTargetLittleEndian = obj->getObjectFile()->isLittleEndian();
 
   // Symbols found in this object
   StringMap<SymbolLoc> LocalSymbols;
@@ -171,7 +181,7 @@ ObjectImage *RuntimeDyldImpl::loadObject(ObjectBuffer *InputBuffer) {
   }
 
   // Give the subclasses a chance to tie-up any loose ends.
-  finalizeLoad();
+  finalizeLoad(LocalSections);
 
   return obj.take();
 }
@@ -254,6 +264,7 @@ unsigned RuntimeDyldImpl::emitSection(ObjectImage &Obj,
   bool IsZeroInit;
   bool IsReadOnly;
   uint64_t DataSize;
+  unsigned PaddingSize = 0;
   StringRef Name;
   Check(Section.isRequiredForExecution(IsRequired));
   Check(Section.isVirtual(IsVirtual));
@@ -268,6 +279,12 @@ unsigned RuntimeDyldImpl::emitSection(ObjectImage &Obj,
       StubBufSize += StubAlignment - EndAlignment;
   }
 
+  // The .eh_frame section (at least on Linux) needs an extra four bytes padded
+  // with zeroes added at the end.  For MachO objects, this section has a
+  // slightly different name, so this won't have any effect for MachO objects.
+  if (Name == ".eh_frame")
+    PaddingSize = 4;
+
   unsigned Allocate;
   unsigned SectionID = Sections.size();
   uint8_t *Addr;
@@ -276,7 +293,7 @@ unsigned RuntimeDyldImpl::emitSection(ObjectImage &Obj,
   // Some sections, such as debug info, don't need to be loaded for execution.
   // Leave those where they are.
   if (IsRequired) {
-    Allocate = DataSize + StubBufSize;
+    Allocate = DataSize + PaddingSize + StubBufSize;
     Addr = IsCode
       ? MemMgr->allocateCodeSection(Allocate, Alignment, SectionID, Name)
       : MemMgr->allocateDataSection(Allocate, Alignment, SectionID, Name,
@@ -293,6 +310,13 @@ unsigned RuntimeDyldImpl::emitSection(ObjectImage &Obj,
       memset(Addr, 0, DataSize);
     else
       memcpy(Addr, pData, DataSize);
+
+    // Fill in any extra bytes we allocated for padding
+    if (PaddingSize != 0) {
+      memset(Addr + DataSize, 0, PaddingSize);
+      // Update the DataSize variable so that the stub offset is set correctly.
+      DataSize += PaddingSize;
+    }
 
     DEBUG(dbgs() << "emitSection SectionID: " << SectionID
                  << " Name: " << Name
@@ -485,7 +509,7 @@ void RuntimeDyldImpl::resolveExternalSymbols() {
       } else {
         // We found the symbol in our global table.  It was probably in a
         // Module that we loaded previously.
-        SymbolLoc SymLoc = GlobalSymbolTable.lookup(Name);
+        SymbolLoc SymLoc = Loc->second;
         Addr = getSectionLoadAddress(SymLoc.first) + SymLoc.second;
       }
 
@@ -552,6 +576,7 @@ ObjectImage *RuntimeDyld::loadObject(ObjectBuffer *InputBuffer) {
     case sys::fs::file_magic::coff_object:
     case sys::fs::file_magic::pecoff_executable:
     case sys::fs::file_magic::macho_universal_binary:
+    case sys::fs::file_magic::windows_resource:
       report_fatal_error("Incompatible object format!");
     }
   } else {
@@ -592,8 +617,14 @@ StringRef RuntimeDyld::getErrorString() {
   return Dyld->getErrorString();
 }
 
-StringRef RuntimeDyld::getEHFrameSection() {
-  return Dyld->getEHFrameSection();
+void RuntimeDyld::registerEHFrames() {
+  if (Dyld)
+    Dyld->registerEHFrames();
+}
+
+void RuntimeDyld::deregisterEHFrames() {
+  if (Dyld)
+    Dyld->deregisterEHFrames();
 }
 
 } // end namespace llvm

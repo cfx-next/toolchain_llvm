@@ -37,7 +37,7 @@ private:
 public:
   MCMachOStreamer(MCContext &Context, MCAsmBackend &MAB, raw_ostream &OS,
                   MCCodeEmitter *Emitter)
-      : MCObjectStreamer(SK_MachOStreamer, Context, MAB, OS, Emitter) {}
+      : MCObjectStreamer(Context, 0, MAB, OS, Emitter) {}
 
   /// @name MCStreamer Interface
   /// @{
@@ -82,16 +82,14 @@ public:
     // FIXME: Just ignore the .file; it isn't important enough to fail the
     // entire assembly.
 
-    //report_fatal_error("unsupported directive: '.file'");
+    // report_fatal_error("unsupported directive: '.file'");
+  }
+
+  virtual void EmitIdent(StringRef IdentString) {
+    llvm_unreachable("macho doesn't support this directive");
   }
 
   virtual void FinishImpl();
-
-  /// @}
-
-  static bool classof(const MCStreamer *S) {
-    return S->getKind() == SK_MachOStreamer;
-  }
 };
 
 } // end anonymous namespace.

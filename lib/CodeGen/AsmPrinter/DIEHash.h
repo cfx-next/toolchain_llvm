@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/MD5.h"
 
 namespace llvm {
@@ -76,6 +77,7 @@ class DIEHash {
     AttrEntry DW_AT_virtuality;
     AttrEntry DW_AT_visibility;
     AttrEntry DW_AT_vtable_elem_location;
+    AttrEntry DW_AT_type;
 
     // Insert any additional ones here...
   };
@@ -106,6 +108,9 @@ private:
   /// \brief Encodes and adds \param Value to the hash as a ULEB128.
   void addULEB128(uint64_t Value);
 
+  /// \brief Encodes and adds \param Value to the hash as a SLEB128.
+  void addSLEB128(int64_t Value);
+
   /// \brief Adds \param Str to the hash and includes a NULL byte.
   void addString(StringRef Str);
 
@@ -114,12 +119,13 @@ private:
   void collectAttributes(DIE *Die, DIEAttrs &Attrs);
 
   /// \brief Hashes the attributes in \param Attrs in order.
-  void hashAttributes(const DIEAttrs &Attrs);
+  void hashAttributes(const DIEAttrs &Attrs, dwarf::Tag Tag);
 
   /// \brief Hashes an individual attribute.
-  void hashAttribute(AttrEntry Attr);
+  void hashAttribute(AttrEntry Attr, dwarf::Tag Tag);
 
 private:
   MD5 Hash;
+  DenseMap<DIE*, unsigned> Numbering;
 };
 }

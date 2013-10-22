@@ -329,7 +329,22 @@ void MCELFStreamer::EmitFileDirective(StringRef Filename) {
   SD.setFlags(ELF_STT_File | ELF_STB_Local | ELF_STV_Default);
 }
 
-void  MCELFStreamer::fixSymbolsInTLSFixups(const MCExpr *expr) {
+void MCELFStreamer::EmitIdent(StringRef IdentString) {
+  const MCSection *Comment = getAssembler().getContext().getELFSection(
+      ".comment", ELF::SHT_PROGBITS, ELF::SHF_MERGE | ELF::SHF_STRINGS,
+      SectionKind::getReadOnly(), 1, "");
+  PushSection();
+  SwitchSection(Comment);
+  if (!SeenIdent) {
+    EmitIntValue(0, 1);
+    SeenIdent = true;
+  }
+  EmitBytes(IdentString);
+  EmitIntValue(0, 1);
+  PopSection();
+}
+
+void MCELFStreamer::fixSymbolsInTLSFixups(const MCExpr *expr) {
   switch (expr->getKind()) {
   case MCExpr::Target:
     cast<MCTargetExpr>(expr)->fixELFSymbolsInTLSFixups(getAssembler());
@@ -560,15 +575,12 @@ void MCELFStreamer::FinishImpl() {
   this->MCObjectStreamer::FinishImpl();
 }
 
-void MCELFStreamer::EmitTCEntry(const MCSymbol &S) {
-  // Creates a R_PPC64_TOC relocation
-  MCObjectStreamer::EmitSymbolValue(&S, 8);
-}
-
-MCStreamer *llvm::createELFStreamer(MCContext &Context, MCAsmBackend &MAB,
-                                    raw_ostream &OS, MCCodeEmitter *CE,
-                                    bool RelaxAll, bool NoExecStack) {
-  MCELFStreamer *S = new MCELFStreamer(Context, MAB, OS, CE);
+MCStreamer *llvm::createELFStreamer(MCContext &Context,
+                                    MCTargetStreamer *Streamer,
+                                    MCAsmBackend &MAB, raw_ostream &OS,
+                                    MCCodeEmitter *CE, bool RelaxAll,
+                                    bool NoExecStack) {
+  MCELFStreamer *S = new MCELFStreamer(Context, Streamer, MAB, OS, CE);
   if (RelaxAll)
     S->getAssembler().setRelaxAll(true);
   if (NoExecStack)

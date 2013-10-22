@@ -116,6 +116,13 @@ static const unsigned InitAbbreviationsSetSize = 9; // log2(512)
 
 namespace llvm {
 
+/// resolve - Look in the DwarfDebug map for the MDNode that
+/// corresponds to the reference.
+template <typename T>
+T DbgVariable::resolve(DIRef<T> Ref) const {
+  return DD->resolve(Ref);
+}
+
 DIType DbgVariable::getType() const {
   DIType Ty = Var.getType();
   // FIXME: isBlockByrefVariable should be reformulated in terms of complex
@@ -149,13 +156,13 @@ DIType DbgVariable::getType() const {
     uint16_t tag = Ty.getTag();
 
     if (tag == dwarf::DW_TAG_pointer_type)
-      subType = DIDerivedType(Ty).getTypeDerivedFrom();
+      subType = resolve(DIDerivedType(Ty).getTypeDerivedFrom());
 
     DIArray Elements = DICompositeType(subType).getTypeArray();
     for (unsigned i = 0, N = Elements.getNumElements(); i < N; ++i) {
       DIDerivedType DT = DIDerivedType(Elements.getElement(i));
       if (getName() == DT.getName())
-        return (DT.getTypeDerivedFrom());
+        return (resolve(DT.getTypeDerivedFrom()));
     }
   }
   return Ty;
@@ -189,9 +196,8 @@ DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
   DwarfAbbrevDWOSectionSym = DwarfStrDWOSectionSym = 0;
   FunctionBeginSym = FunctionEndSym = 0;
 
-  // Turn on accelerator tables and older gdb compatibility
-  // for Darwin by default, pubnames by default for non-Darwin,
-  // and handle split dwarf.
+  // Turn on accelerator tables for Darwin by default, pubnames by
+  // default for non-Darwin, and handle split dwarf.
   bool IsDarwin = Triple(A->getTargetTriple()).isOSDarwin();
 
   if (DwarfAccelTables == Default)
@@ -215,8 +221,6 @@ DwarfDebug::DwarfDebug(AsmPrinter *A, Module *M)
     NamedRegionTimer T(DbgTimerName, DWARFGroupName, TimePassesIsEnabled);
     beginModule();
   }
-}
-DwarfDebug::~DwarfDebug() {
 }
 
 // Switch to the specified MCSection and emit an assembler
@@ -375,8 +379,7 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(CompileUnit *SPCU,
   if (DIE *AbsSPDIE = AbstractSPDies.lookup(SPNode)) {
     // Pick up abstract subprogram DIE.
     SPDie = new DIE(dwarf::DW_TAG_subprogram);
-    SPCU->addDIEEntry(SPDie, dwarf::DW_AT_abstract_origin,
-                      dwarf::DW_FORM_ref4, AbsSPDIE);
+    SPCU->addDIEEntry(SPDie, dwarf::DW_AT_abstract_origin, AbsSPDIE);
     SPCU->addDie(SPDie);
   } else {
     DISubprogram SPDecl = SP.getFunctionDeclaration();
@@ -386,9 +389,10 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(CompileUnit *SPCU,
       // function then gdb prefers the definition at top level and but does not
       // expect specification DIE in parent function. So avoid creating
       // specification DIE for a function defined inside a function.
-      if (SP.isDefinition() && !SP.getContext().isCompileUnit() &&
-          !SP.getContext().isFile() &&
-          !isSubprogramContext(SP.getContext())) {
+      DIScope SPContext = resolve(SP.getContext());
+      if (SP.isDefinition() && !SPContext.isCompileUnit() &&
+          !SPContext.isFile() &&
+          !isSubprogramContext(SPContext)) {
         SPCU->addFlag(SPDie, dwarf::DW_AT_declaration);
 
         // Add arguments.
@@ -403,14 +407,12 @@ DIE *DwarfDebug::updateSubprogramScopeDIE(CompileUnit *SPCU,
             if (ATy.isArtificial())
               SPCU->addFlag(Arg, dwarf::DW_AT_artificial);
             if (ATy.isObjectPointer())
-              SPCU->addDIEEntry(SPDie, dwarf::DW_AT_object_pointer,
-                                dwarf::DW_FORM_ref4, Arg);
+              SPCU->addDIEEntry(SPDie, dwarf::DW_AT_object_pointer, Arg);
             SPDie->addChild(Arg);
           }
         DIE *SPDeclDie = SPDie;
         SPDie = new DIE(dwarf::DW_TAG_subprogram);
-        SPCU->addDIEEntry(SPDie, dwarf::DW_AT_specification,
-                          dwarf::DW_FORM_ref4, SPDeclDie);
+        SPCU->addDIEEntry(SPDie, dwarf::DW_AT_specification, SPDeclDie);
         SPCU->addDie(SPDie);
       }
     }
@@ -520,8 +522,7 @@ DIE *DwarfDebug::constructInlinedScopeDIE(CompileUnit *TheCU,
   }
 
   DIE *ScopeDIE = new DIE(dwarf::DW_TAG_inlined_subroutine);
-  TheCU->addDIEEntry(ScopeDIE, dwarf::DW_AT_abstract_origin,
-                     dwarf::DW_FORM_ref4, OriginDIE);
+  TheCU->addDIEEntry(ScopeDIE, dwarf::DW_AT_abstract_origin, OriginDIE);
 
   if (Ranges.size() > 1) {
     // .debug_range section has not been laid out yet. Emit offset in
@@ -557,10 +558,10 @@ DIE *DwarfDebug::constructInlinedScopeDIE(CompileUnit *TheCU,
 
   // Add the call site information to the DIE.
   DILocation DL(Scope->getInlinedAt());
-  TheCU->addUInt(ScopeDIE, dwarf::DW_AT_call_file, 0,
+  TheCU->addUInt(ScopeDIE, dwarf::DW_AT_call_file, None,
                  getOrCreateSourceID(DL.getFilename(), DL.getDirectory(),
                                      TheCU->getUniqueID()));
-  TheCU->addUInt(ScopeDIE, dwarf::DW_AT_call_line, 0, DL.getLineNumber());
+  TheCU->addUInt(ScopeDIE, dwarf::DW_AT_call_line, None, DL.getLineNumber());
 
   // Add name to the name table, we do this here because we're guaranteed
   // to have concrete versions of our DW_TAG_inlined_subprogram nodes.
@@ -666,8 +667,7 @@ DIE *DwarfDebug::constructScopeDIE(CompileUnit *TheCU, LexicalScope *Scope) {
     ScopeDIE->addChild(*I);
 
   if (DS.isSubprogram() && ObjectPointer != NULL)
-    TheCU->addDIEEntry(ScopeDIE, dwarf::DW_AT_object_pointer,
-                       dwarf::DW_FORM_ref4, ObjectPointer);
+    TheCU->addDIEEntry(ScopeDIE, dwarf::DW_AT_object_pointer, ObjectPointer);
 
   if (DS.isSubprogram())
     TheCU->addPubTypes(DISubprogram(DS));
@@ -683,8 +683,10 @@ unsigned DwarfDebug::getOrCreateSourceID(StringRef FileName,
                                          StringRef DirName, unsigned CUID) {
   // If we use .loc in assembly, we can't separate .file entries according to
   // compile units. Thus all files will belong to the default compile unit.
-  if (Asm->TM.hasMCUseLoc() &&
-      Asm->OutStreamer.getKind() == MCStreamer::SK_AsmStreamer)
+
+  // FIXME: add a better feature test than hasRawTextSupport. Even better,
+  // extend .file to support this.
+  if (Asm->TM.hasMCUseLoc() && Asm->OutStreamer.hasRawTextSupport())
     CUID = 0;
 
   // If FE did not provide a file name, then assume stdin.
@@ -752,9 +754,8 @@ CompileUnit *DwarfDebug::constructCompileUnit(const MDNode *N) {
 
   // Use a single line table if we are using .loc and generating assembly.
   bool UseTheFirstCU =
-    (Asm->TM.hasMCUseLoc() &&
-     Asm->OutStreamer.getKind() == MCStreamer::SK_AsmStreamer) ||
-    (NewCU->getUniqueID() == 0);
+      (Asm->TM.hasMCUseLoc() && Asm->OutStreamer.hasRawTextSupport()) ||
+      (NewCU->getUniqueID() == 0);
 
   if (!useSplitDwarf()) {
     // DW_AT_stmt_list is a offset of line number information for this
@@ -825,8 +826,11 @@ CompileUnit *DwarfDebug::constructCompileUnit(const MDNode *N) {
 }
 
 // Construct subprogram DIE.
-void DwarfDebug::constructSubprogramDIE(CompileUnit *TheCU,
-                                        const MDNode *N) {
+void DwarfDebug::constructSubprogramDIE(CompileUnit *TheCU, const MDNode *N) {
+  // FIXME: We should only call this routine once, however, during LTO if a
+  // program is defined in multiple CUs we could end up calling it out of
+  // beginModule as we walk the CUs.
+
   CompileUnit *&CURef = SPMap[N];
   if (CURef)
     return;
@@ -841,7 +845,7 @@ void DwarfDebug::constructSubprogramDIE(CompileUnit *TheCU,
   DIE *SubprogramDie = TheCU->getOrCreateSubprogramDIE(SP);
 
   // Expose as a global name.
-  TheCU->addGlobalName(SP.getName(), SubprogramDie);
+  TheCU->addGlobalName(SP.getName(), SubprogramDie, resolve(SP.getContext()));
 }
 
 void DwarfDebug::constructImportedEntityDIE(CompileUnit *TheCU,
@@ -882,10 +886,9 @@ void DwarfDebug::constructImportedEntityDIE(CompileUnit *TheCU,
   unsigned FileID = getOrCreateSourceID(Module.getContext().getFilename(),
                                         Module.getContext().getDirectory(),
                                         TheCU->getUniqueID());
-  TheCU->addUInt(IMDie, dwarf::DW_AT_decl_file, 0, FileID);
-  TheCU->addUInt(IMDie, dwarf::DW_AT_decl_line, 0, Module.getLineNumber());
-  TheCU->addDIEEntry(IMDie, dwarf::DW_AT_import, dwarf::DW_FORM_ref4,
-                     EntityDie);
+  TheCU->addUInt(IMDie, dwarf::DW_AT_decl_file, None, FileID);
+  TheCU->addUInt(IMDie, dwarf::DW_AT_decl_line, None, Module.getLineNumber());
+  TheCU->addDIEEntry(IMDie, dwarf::DW_AT_import, EntityDie);
   StringRef Name = Module.getName();
   if (!Name.empty())
     TheCU->addString(IMDie, dwarf::DW_AT_name, Name);
@@ -952,14 +955,14 @@ void DwarfDebug::computeInlinedDIEs() {
   for (SmallPtrSet<DIE *, 4>::iterator AI = InlinedSubprogramDIEs.begin(),
          AE = InlinedSubprogramDIEs.end(); AI != AE; ++AI) {
     DIE *ISP = *AI;
-    FirstCU->addUInt(ISP, dwarf::DW_AT_inline, 0, dwarf::DW_INL_inlined);
+    FirstCU->addUInt(ISP, dwarf::DW_AT_inline, None, dwarf::DW_INL_inlined);
   }
   for (DenseMap<const MDNode *, DIE *>::iterator AI = AbstractSPDies.begin(),
          AE = AbstractSPDies.end(); AI != AE; ++AI) {
     DIE *ISP = AI->second;
     if (InlinedSubprogramDIEs.count(ISP))
       continue;
-    FirstCU->addUInt(ISP, dwarf::DW_AT_inline, 0, dwarf::DW_INL_inlined);
+    FirstCU->addUInt(ISP, dwarf::DW_AT_inline, None, dwarf::DW_INL_inlined);
   }
 }
 
@@ -974,28 +977,35 @@ void DwarfDebug::collectDeadVariables() {
       DIArray Subprograms = TheCU.getSubprograms();
       for (unsigned i = 0, e = Subprograms.getNumElements(); i != e; ++i) {
         DISubprogram SP(Subprograms.getElement(i));
-        if (ProcessedSPNodes.count(SP) != 0) continue;
-        if (!SP.isSubprogram()) continue;
-        if (!SP.isDefinition()) continue;
+        if (ProcessedSPNodes.count(SP) != 0)
+          continue;
+        if (!SP.isSubprogram())
+          continue;
+        if (!SP.isDefinition())
+          continue;
         DIArray Variables = SP.getVariables();
-        if (Variables.getNumElements() == 0) continue;
+        if (Variables.getNumElements() == 0)
+          continue;
 
         LexicalScope *Scope =
-          new LexicalScope(NULL, DIDescriptor(SP), NULL, false);
+            new LexicalScope(NULL, DIDescriptor(SP), NULL, false);
         DeadFnScopeMap[SP] = Scope;
 
         // Construct subprogram DIE and add variables DIEs.
         CompileUnit *SPCU = CUMap.lookup(TheCU);
         assert(SPCU && "Unable to find Compile Unit!");
+        // FIXME: See the comment in constructSubprogramDIE about duplicate
+        // subprogram DIEs.
         constructSubprogramDIE(SPCU, SP);
-        DIE *ScopeDIE = SPCU->getDIE(SP);
+        DIE *SPDIE = SPCU->getDIE(SP);
         for (unsigned vi = 0, ve = Variables.getNumElements(); vi != ve; ++vi) {
           DIVariable DV(Variables.getElement(vi));
-          if (!DV.isVariable()) continue;
-          DbgVariable NewVar(DV, NULL);
+          if (!DV.isVariable())
+            continue;
+          DbgVariable NewVar(DV, NULL, this);
           if (DIE *VariableDIE =
-              SPCU->constructVariableDIE(&NewVar, Scope->isAbstractScope()))
-            ScopeDIE->addChild(VariableDIE);
+                  SPCU->constructVariableDIE(&NewVar, Scope->isAbstractScope()))
+            SPDIE->addChild(VariableDIE);
         }
       }
     }
@@ -1251,7 +1261,7 @@ DbgVariable *DwarfDebug::findAbstractVariable(DIVariable &DV,
   if (!Scope)
     return NULL;
 
-  AbsDbgVariable = new DbgVariable(Var, NULL);
+  AbsDbgVariable = new DbgVariable(Var, NULL, this);
   addScopeVariable(Scope, AbsDbgVariable);
   AbstractVariables[Var] = AbsDbgVariable;
   return AbsDbgVariable;
@@ -1300,7 +1310,7 @@ DwarfDebug::collectVariableInfoFromMMITable(const MachineFunction *MF,
       continue;
 
     DbgVariable *AbsDbgVariable = findAbstractVariable(DV, VP.second);
-    DbgVariable *RegVar = new DbgVariable(DV, AbsDbgVariable);
+    DbgVariable *RegVar = new DbgVariable(DV, AbsDbgVariable, this);
     RegVar->setFrameIndex(VP.first);
     if (!addCurrentFnArgument(MF, RegVar, Scope))
       addScopeVariable(Scope, RegVar);
@@ -1385,7 +1395,7 @@ DwarfDebug::collectVariableInfo(const MachineFunction *MF,
     Processed.insert(DV);
     assert(MInsn->isDebugValue() && "History must begin with debug value");
     DbgVariable *AbsVar = findAbstractVariable(DV, MInsn->getDebugLoc());
-    DbgVariable *RegVar = new DbgVariable(DV, AbsVar);
+    DbgVariable *RegVar = new DbgVariable(DV, AbsVar, this);
     if (!addCurrentFnArgument(MF, RegVar, Scope))
       addScopeVariable(Scope, RegVar);
     if (AbsVar)
@@ -1448,7 +1458,7 @@ DwarfDebug::collectVariableInfo(const MachineFunction *MF,
     if (!DV || !DV.isVariable() || !Processed.insert(DV))
       continue;
     if (LexicalScope *Scope = LScopes.findLexicalScope(DV.getContext()))
-      addScopeVariable(Scope, new DbgVariable(DV, NULL));
+      addScopeVariable(Scope, new DbgVariable(DV, NULL, this));
   }
 }
 
@@ -1601,8 +1611,7 @@ void DwarfDebug::beginFunction(const MachineFunction *MF) {
   LexicalScope *FnScope = LScopes.getCurrentFunctionScope();
   CompileUnit *TheCU = SPMap.lookup(FnScope->getScopeNode());
   assert(TheCU && "Unable to find compile unit!");
-  if (Asm->TM.hasMCUseLoc() &&
-      Asm->OutStreamer.getKind() == MCStreamer::SK_AsmStreamer)
+  if (Asm->TM.hasMCUseLoc() && Asm->OutStreamer.hasRawTextSupport())
     // Use a single line table if we are using .loc and generating assembly.
     Asm->OutStreamer.getContext().setDwarfCompileUnitID(0);
   else
@@ -1844,7 +1853,7 @@ void DwarfDebug::endFunction(const MachineFunction *MF) {
         if (AbstractVariables.lookup(CleanDV))
           continue;
         if (LexicalScope *Scope = LScopes.findAbstractScope(DV.getContext()))
-          addScopeVariable(Scope, new DbgVariable(DV, NULL));
+          addScopeVariable(Scope, new DbgVariable(DV, NULL, this));
       }
     }
     if (ProcessedSPNodes.count(AScope->getScopeNode()) == 0)
@@ -2038,8 +2047,8 @@ void DwarfDebug::emitDIE(DIE *Die, std::vector<DIEAbbrev *> *Abbrevs) {
 
   // Emit the DIE attribute values.
   for (unsigned i = 0, N = Values.size(); i < N; ++i) {
-    unsigned Attr = AbbrevData[i].getAttribute();
-    unsigned Form = AbbrevData[i].getForm();
+    dwarf::Attribute Attr = AbbrevData[i].getAttribute();
+    dwarf::Form Form = AbbrevData[i].getForm();
     assert(Form && "Too many attributes for DIE (check abbreviation)");
 
     if (Asm->isVerbose())
@@ -2355,9 +2364,17 @@ void DwarfDebug::emitAccelTypes() {
 /// computeIndexValue - Compute the gdb index value for the DIE and CU.
 static dwarf::PubIndexEntryDescriptor computeIndexValue(CompileUnit *CU,
                                                         DIE *Die) {
-  dwarf::GDBIndexEntryLinkage Linkage =
-      Die->findAttribute(dwarf::DW_AT_external) ? dwarf::GIEL_EXTERNAL
-                                                : dwarf::GIEL_STATIC;
+  dwarf::GDBIndexEntryLinkage Linkage = dwarf::GIEL_STATIC;
+
+  // We could have a specification DIE that has our most of our knowledge,
+  // look for that now.
+  DIEValue *SpecVal = Die->findAttribute(dwarf::DW_AT_specification);
+  if (SpecVal) {
+    DIE *SpecDIE = cast<DIEEntry>(SpecVal)->getEntry();
+    if (SpecDIE->findAttribute(dwarf::DW_AT_external))
+      Linkage = dwarf::GIEL_EXTERNAL;
+  } else if (Die->findAttribute(dwarf::DW_AT_external))
+    Linkage = dwarf::GIEL_EXTERNAL;
 
   switch (Die->getTag()) {
   case dwarf::DW_TAG_class_type:

@@ -33,17 +33,17 @@ namespace llvm {
   class DIEAbbrevData {
     /// Attribute - Dwarf attribute code.
     ///
-    uint16_t Attribute;
+    dwarf::Attribute Attribute;
 
     /// Form - Dwarf form code.
     ///
-    uint16_t Form;
+    dwarf::Form Form;
   public:
-    DIEAbbrevData(uint16_t A, uint16_t F) : Attribute(A), Form(F) {}
+    DIEAbbrevData(dwarf::Attribute A, dwarf::Form F) : Attribute(A), Form(F) {}
 
     // Accessors.
-    uint16_t getAttribute() const { return Attribute; }
-    uint16_t getForm()      const { return Form; }
+    dwarf::Attribute getAttribute() const { return Attribute; }
+    dwarf::Form getForm() const { return Form; }
 
     /// Profile - Used to gather unique data for the abbreviation folding set.
     ///
@@ -56,7 +56,7 @@ namespace llvm {
   class DIEAbbrev : public FoldingSetNode {
     /// Tag - Dwarf tag code.
     ///
-    uint16_t Tag;
+    dwarf::Tag Tag;
 
     /// ChildrenFlag - Dwarf children flag.
     ///
@@ -71,20 +71,19 @@ namespace llvm {
     SmallVector<DIEAbbrevData, 12> Data;
 
   public:
-    DIEAbbrev(uint16_t T, uint16_t C) : Tag(T), ChildrenFlag(C), Data() {}
+    DIEAbbrev(dwarf::Tag T, uint16_t C) : Tag(T), ChildrenFlag(C), Data() {}
 
     // Accessors.
-    uint16_t getTag() const { return Tag; }
+    dwarf::Tag getTag() const { return Tag; }
     unsigned getNumber() const { return Number; }
     uint16_t getChildrenFlag() const { return ChildrenFlag; }
     const SmallVectorImpl<DIEAbbrevData> &getData() const { return Data; }
-    void setTag(uint16_t T) { Tag = T; }
     void setChildrenFlag(uint16_t CF) { ChildrenFlag = CF; }
     void setNumber(unsigned N) { Number = N; }
 
     /// AddAttribute - Adds another set of attribute information to the
     /// abbreviation.
-    void AddAttribute(uint16_t Attribute, uint16_t Form) {
+    void AddAttribute(dwarf::Attribute Attribute, dwarf::Form Form) {
       Data.push_back(DIEAbbrevData(Attribute, Form));
     }
 
@@ -137,25 +136,26 @@ namespace llvm {
 #endif
   public:
     explicit DIE(unsigned Tag)
-      : Offset(0), Size(0), Abbrev(Tag, dwarf::DW_CHILDREN_no), Parent(0) {}
+        : Offset(0), Size(0), Abbrev((dwarf::Tag)Tag, dwarf::DW_CHILDREN_no),
+          Parent(0) {}
     virtual ~DIE();
 
     // Accessors.
     DIEAbbrev &getAbbrev() { return Abbrev; }
     unsigned getAbbrevNumber() const { return Abbrev.getNumber(); }
-    uint16_t getTag() const { return Abbrev.getTag(); }
+    dwarf::Tag getTag() const { return Abbrev.getTag(); }
     unsigned getOffset() const { return Offset; }
     unsigned getSize() const { return Size; }
     const std::vector<DIE *> &getChildren() const { return Children; }
     const SmallVectorImpl<DIEValue*> &getValues() const { return Values; }
     DIE *getParent() const { return Parent; }
-    void setTag(uint16_t Tag) { Abbrev.setTag(Tag); }
     void setOffset(unsigned O) { Offset = O; }
     void setSize(unsigned S) { Size = S; }
 
     /// addValue - Add a value and attributes to a DIE.
     ///
-    void addValue(uint16_t Attribute, uint16_t Form, DIEValue *Value) {
+    void addValue(dwarf::Attribute Attribute, dwarf::Form Form,
+                  DIEValue *Value) {
       Abbrev.AddAttribute(Attribute, Form);
       Values.push_back(Value);
     }
@@ -207,11 +207,11 @@ namespace llvm {
 
     /// EmitValue - Emit value via the Dwarf writer.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const = 0;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const = 0;
 
     /// SizeOf - Return the size of a value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const = 0;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const = 0;
 
 #ifndef NDEBUG
     virtual void print(raw_ostream &O) const = 0;
@@ -229,7 +229,7 @@ namespace llvm {
 
     /// BestForm - Choose the best form for integer.
     ///
-    static uint16_t BestForm(bool IsSigned, uint64_t Int) {
+    static dwarf::Form BestForm(bool IsSigned, uint64_t Int) {
       if (IsSigned) {
         const int64_t SignedInt = Int;
         if ((char)Int == SignedInt)     return dwarf::DW_FORM_data1;
@@ -245,13 +245,13 @@ namespace llvm {
 
     /// EmitValue - Emit integer of appropriate size.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     uint64_t getValue() const { return Integer; }
 
     /// SizeOf - Determine size of integer value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *I) { return I->getType() == isInteger; }
@@ -271,7 +271,7 @@ namespace llvm {
 
     /// EmitValue - Emit expression value.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// getValue - Get MCExpr.
     ///
@@ -279,7 +279,7 @@ namespace llvm {
 
     /// SizeOf - Determine size of expression value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *E) { return E->getType() == isExpr; }
@@ -299,7 +299,7 @@ namespace llvm {
 
     /// EmitValue - Emit label value.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// getValue - Get MCSymbol.
     ///
@@ -307,7 +307,7 @@ namespace llvm {
 
     /// SizeOf - Determine size of label value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *L) { return L->getType() == isLabel; }
@@ -329,11 +329,11 @@ namespace llvm {
 
     /// EmitValue - Emit delta value.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// SizeOf - Determine size of delta value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *D) { return D->getType() == isDelta; }
@@ -359,11 +359,11 @@ namespace llvm {
 
     /// EmitValue - Emit delta value.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// SizeOf - Determine size of delta value in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *D) { return D->getType() == isString; }
@@ -388,11 +388,11 @@ namespace llvm {
 
     /// EmitValue - Emit debug information entry offset.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// SizeOf - Determine size of debug information entry in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const {
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const {
       return Form == dwarf::DW_FORM_ref_addr ? getRefAddrSize(AP)
                                              : sizeof(int32_t);
     }
@@ -414,9 +414,7 @@ namespace llvm {
   class DIEBlock : public DIEValue, public DIE {
     unsigned Size;                // Size in bytes excluding size header.
   public:
-    DIEBlock()
-      : DIEValue(isBlock), DIE(0), Size(0) {}
-    virtual ~DIEBlock() {}
+    DIEBlock() : DIEValue(isBlock), DIE(0), Size(0) {}
 
     /// ComputeSize - calculate the size of the block.
     ///
@@ -424,7 +422,7 @@ namespace llvm {
 
     /// BestForm - Choose the best form for data.
     ///
-    uint16_t BestForm() const {
+    dwarf::Form BestForm() const {
       if ((unsigned char)Size == Size)  return dwarf::DW_FORM_block1;
       if ((unsigned short)Size == Size) return dwarf::DW_FORM_block2;
       if ((unsigned int)Size == Size)   return dwarf::DW_FORM_block4;
@@ -433,11 +431,11 @@ namespace llvm {
 
     /// EmitValue - Emit block data.
     ///
-    virtual void EmitValue(AsmPrinter *AP, uint16_t Form) const;
+    virtual void EmitValue(AsmPrinter *AP, dwarf::Form Form) const;
 
     /// SizeOf - Determine size of block data in bytes.
     ///
-    virtual unsigned SizeOf(AsmPrinter *AP, uint16_t Form) const;
+    virtual unsigned SizeOf(AsmPrinter *AP, dwarf::Form Form) const;
 
     // Implement isa/cast/dyncast.
     static bool classof(const DIEValue *E) { return E->getType() == isBlock; }

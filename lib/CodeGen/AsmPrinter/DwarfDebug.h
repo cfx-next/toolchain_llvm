@@ -150,11 +150,12 @@ class DbgVariable {
   DbgVariable *AbsVar;               // Corresponding Abstract variable, if any.
   const MachineInstr *MInsn;         // DBG_VALUE instruction of the variable.
   int FrameIndex;
+  DwarfDebug *DD;
 public:
   // AbsVar may be NULL.
-  DbgVariable(DIVariable V, DbgVariable *AV)
+  DbgVariable(DIVariable V, DbgVariable *AV, DwarfDebug *DD)
     : Var(V), TheDIE(0), DotDebugLocOffset(~0U), AbsVar(AV), MInsn(0),
-      FrameIndex(~0) {}
+      FrameIndex(~0), DD(DD) {}
 
   // Accessors.
   DIVariable getVariable()           const { return Var; }
@@ -208,6 +209,11 @@ public:
     return Var.getAddrElement(i);
   }
   DIType getType() const;
+
+private:
+  /// resolve - Look in the DwarfDebug map for the MDNode that
+  /// corresponds to the reference.
+  template <typename T> T resolve(DIRef<T> Ref) const;
 };
 
 /// \brief Collects and handles information specific to a particular
@@ -422,9 +428,6 @@ class DwarfDebug {
 
   // Holders for the various debug information flags that we might need to
   // have exposed. See accessor functions below for description.
-
-  // Whether or not we're emitting info for older versions of gdb on darwin.
-  bool IsDarwinGDBCompat;
 
   // Holder for imported entities.
   typedef SmallVector<std::pair<const MDNode *, const MDNode *>, 32>
@@ -655,7 +658,6 @@ public:
   // Main entry points.
   //
   DwarfDebug(AsmPrinter *A, Module *M);
-  ~DwarfDebug();
 
   /// \brief Emit all Dwarf sections that should come prior to the
   /// content.
@@ -696,10 +698,6 @@ public:
   /// \brief Recursively Emits a debug information entry.
   void emitDIE(DIE *Die, std::vector<DIEAbbrev *> *Abbrevs);
 
-  /// \brief Returns whether or not to limit some of our debug
-  /// output to the limitations of darwin gdb.
-  bool useDarwinGDBCompat() { return IsDarwinGDBCompat; }
-
   // Experimental DWARF5 features.
 
   /// \brief Returns whether or not to emit tables that dwarf consumers can
@@ -713,9 +711,8 @@ public:
   /// Returns the Dwarf Version.
   unsigned getDwarfVersion() const { return DwarfVersion; }
 
-  /// Find the MDNode for the given scope reference.
-  template <typename T>
-  T resolve(DIRef<T> Ref) const {
+  /// Find the MDNode for the given reference.
+  template <typename T> T resolve(DIRef<T> Ref) const {
     return Ref.resolve(TypeIdentifierMap);
   }
 

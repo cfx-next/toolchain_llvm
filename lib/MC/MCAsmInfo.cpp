@@ -53,6 +53,7 @@ MCAsmInfo::MCAsmInfo() {
   AllowQuotesInName = false;
   AllowNameToStartWithDigit = false;
   AllowPeriodsInName = true;
+  AllowAtInName = false;
   AllowUTF8 = true;
   UseDataRegionDirectives = false;
   ZeroDirective = "\t.zero\t";
@@ -76,6 +77,7 @@ MCAsmInfo::MCAsmInfo() {
   LCOMMDirectiveAlignmentType = LCOMM::NoAlignment;
   HasDotTypeDotSizeDirective = true;
   HasSingleParameterDotFile = true;
+  HasIdentDirective = false;
   HasNoDeadStrip = false;
   HasSymbolResolver = false;
   WeakRefDirective = 0;
