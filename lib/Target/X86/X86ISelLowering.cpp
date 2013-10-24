@@ -631,7 +631,7 @@ void X86TargetLowering::resetOperationActions() {
   setOperationAction(ISD::STACKSAVE,          MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,       MVT::Other, Expand);
 
-  if (Subtarget->isTargetCOFF() && !Subtarget->isTargetEnvMacho())
+  if (Subtarget->isOSWindows() && !Subtarget->isTargetEnvMacho())
     setOperationAction(ISD::DYNAMIC_STACKALLOC, Subtarget->is64Bit() ?
                        MVT::i64 : MVT::i32, Custom);
   else if (TM.Options.EnableSegmentedStacks)
@@ -1150,9 +1150,6 @@ void X86TargetLowering::resetOperationActions() {
     setOperationAction(ISD::FNEG,               MVT::v4f64, Custom);
     setOperationAction(ISD::FABS,               MVT::v4f64, Custom);
 
-    setOperationAction(ISD::TRUNCATE,           MVT::v8i16, Custom);
-    setOperationAction(ISD::TRUNCATE,           MVT::v4i32, Custom);
-
     setOperationAction(ISD::FP_TO_SINT,         MVT::v8i16, Custom);
 
     setOperationAction(ISD::FP_TO_SINT,         MVT::v8i32, Legal);
@@ -1160,7 +1157,6 @@ void X86TargetLowering::resetOperationActions() {
     setOperationAction(ISD::SINT_TO_FP,         MVT::v8i32, Legal);
     setOperationAction(ISD::FP_ROUND,           MVT::v4f32, Legal);
 
-    setOperationAction(ISD::ZERO_EXTEND,        MVT::v8i32, Custom);
     setOperationAction(ISD::UINT_TO_FP,         MVT::v8i8,  Custom);
     setOperationAction(ISD::UINT_TO_FP,         MVT::v8i16, Custom);
 
@@ -1193,10 +1189,16 @@ void X86TargetLowering::resetOperationActions() {
 
     setOperationAction(ISD::SIGN_EXTEND,       MVT::v4i64, Custom);
     setOperationAction(ISD::SIGN_EXTEND,       MVT::v8i32, Custom);
+    setOperationAction(ISD::SIGN_EXTEND,       MVT::v16i16, Custom);
     setOperationAction(ISD::ZERO_EXTEND,       MVT::v4i64, Custom);
     setOperationAction(ISD::ZERO_EXTEND,       MVT::v8i32, Custom);
+    setOperationAction(ISD::ZERO_EXTEND,       MVT::v16i16, Custom);
     setOperationAction(ISD::ANY_EXTEND,        MVT::v4i64, Custom);
     setOperationAction(ISD::ANY_EXTEND,        MVT::v8i32, Custom);
+    setOperationAction(ISD::ANY_EXTEND,        MVT::v16i16, Custom);
+    setOperationAction(ISD::TRUNCATE,          MVT::v16i8, Custom);
+    setOperationAction(ISD::TRUNCATE,          MVT::v8i16, Custom);
+    setOperationAction(ISD::TRUNCATE,          MVT::v4i32, Custom);
 
     if (Subtarget->hasFMA() || Subtarget->hasFMA4()) {
       setOperationAction(ISD::FMA,             MVT::v8f32, Legal);
@@ -8864,7 +8866,8 @@ static SDValue LowerAVXExtend(SDValue Op, SelectionDAG &DAG,
   //   Concat upper and lower parts.
   //
 
-  if (((VT != MVT::v8i32) || (InVT != MVT::v8i16)) &&
+  if (((VT != MVT::v16i16) || (InVT != MVT::v16i8)) &&
+      ((VT != MVT::v8i32) || (InVT != MVT::v8i16)) &&
       ((VT != MVT::v4i64) || (InVT != MVT::v4i32)))
     return SDValue();
 
@@ -8944,24 +8947,9 @@ static SDValue LowerZERO_EXTEND(SDValue Op, const X86Subtarget *Subtarget,
       return Res;
   }
 
-  if (!VT.is256BitVector() || !SVT.is128BitVector() ||
-      VT.getVectorNumElements() != SVT.getVectorNumElements())
-    return SDValue();
-
-  assert(Subtarget->hasFp256() && "256-bit vector is observed without AVX!");
-
-  // AVX2 has better support of integer extending.
-  if (Subtarget->hasInt256())
-    return DAG.getNode(X86ISD::VZEXT, DL, VT, In);
-
-  SDValue Lo = DAG.getNode(X86ISD::VZEXT, DL, MVT::v4i32, In);
-  static const int Mask[] = {4, 5, 6, 7, -1, -1, -1, -1};
-  SDValue Hi = DAG.getNode(X86ISD::VZEXT, DL, MVT::v4i32,
-                           DAG.getVectorShuffle(MVT::v8i16, DL, In,
-                                                DAG.getUNDEF(MVT::v8i16),
-                                                &Mask[0]));
-
-  return DAG.getNode(ISD::CONCAT_VECTORS, DL, MVT::v8i32, Lo, Hi);
+  assert(!VT.is256BitVector() || !SVT.is128BitVector() ||
+         VT.getVectorNumElements() != SVT.getVectorNumElements());
+  return SDValue();
 }
 
 SDValue X86TargetLowering::LowerTRUNCATE(SDValue Op, SelectionDAG &DAG) const {
@@ -10404,7 +10392,8 @@ static SDValue LowerSIGN_EXTEND(SDValue Op, const X86Subtarget *Subtarget,
     return LowerSIGN_EXTEND_AVX512(Op, DAG);
 
   if ((VT != MVT::v4i64 || InVT != MVT::v4i32) &&
-      (VT != MVT::v8i32 || InVT != MVT::v8i16))
+      (VT != MVT::v8i32 || InVT != MVT::v8i16) &&
+      (VT != MVT::v16i16 || InVT != MVT::v16i8))
     return SDValue();
 
   if (Subtarget->hasInt256())
@@ -16188,6 +16177,8 @@ static SDValue PerformConcatCombine(SDNode *N, SelectionDAG &DAG,
       Op0->getOpcode() == ISD::BITCAST &&
       !TLI.isTypeLegal(Op0->getValueType(0)) &&
       TLI.isTypeLegal(Op0->getOperand(0)->getValueType(0))) {
+    if (Op0->getOperand(0)->getValueType(0).isVector())
+      return SDValue();
     SDValue Scalar = Op0->getOperand(0);
     // Any legal type here will be a simple value type.
     MVT SVT = Scalar->getValueType(0).getSimpleVT();
@@ -16195,6 +16186,10 @@ static SDValue PerformConcatCombine(SDNode *N, SelectionDAG &DAG,
     if (SVT == MVT::x86mmx)
       return SDValue();
     EVT NVT = MVT::getVectorVT(SVT, 2);
+    // If the result vector type isn't legal, this transform won't really
+    // help, so bail on that, too.
+    if (!TLI.isTypeLegal(NVT))
+      return SDValue();
     SDLoc dl = SDLoc(N);
     SDValue Res = DAG.getNode(ISD::SCALAR_TO_VECTOR, dl, NVT, Scalar);
     Res = DAG.getNode(ISD::BITCAST, dl, VT, Res);
