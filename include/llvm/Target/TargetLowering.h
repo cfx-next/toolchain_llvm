@@ -148,9 +148,10 @@ public:
 
   bool isBigEndian() const { return !IsLittleEndian; }
   bool isLittleEndian() const { return IsLittleEndian; }
-  // Return the pointer type for the given address space, defaults to
-  // the pointer type from the data layout.
-  // FIXME: The default needs to be removed once all the code is updated.
+
+  /// Return the pointer type for the given address space, defaults to
+  /// the pointer type from the data layout.
+  /// FIXME: The default needs to be removed once all the code is updated.
   virtual MVT getPointerTy(uint32_t /*AS*/ = 0) const;
   unsigned getPointerSizeInBits(uint32_t AS = 0) const;
   unsigned getPointerTypeSizeInBits(Type *Ty) const;
@@ -520,13 +521,12 @@ public:
   LegalizeAction
   getCondCodeAction(ISD::CondCode CC, MVT VT) const {
     assert((unsigned)CC < array_lengthof(CondCodeActions) &&
-           (unsigned)VT.SimpleTy < sizeof(CondCodeActions[0])*4 &&
+           ((unsigned)VT.SimpleTy >> 4) < array_lengthof(CondCodeActions[0]) &&
            "Table isn't big enough!");
-    /// The lower 5 bits of the SimpleTy index into Nth 2bit set from the 64bit
-    /// value and the upper 27 bits index into the second dimension of the
-    /// array to select what 64bit value to use.
-    LegalizeAction Action = (LegalizeAction)
-      ((CondCodeActions[CC][VT.SimpleTy >> 5] >> (2*(VT.SimpleTy & 0x1F))) & 3);
+    // See setCondCodeAction for how this is encoded.
+    uint32_t Shift = 2 * (VT.SimpleTy & 0xF);
+    uint32_t Value = CondCodeActions[CC][VT.SimpleTy >> 4];
+    LegalizeAction Action = (LegalizeAction) ((Value >> Shift) & 0x3);
     assert(Action != Promote && "Can't promote condition code!");
     return Action;
   }
@@ -1020,13 +1020,12 @@ protected:
     assert(VT < MVT::LAST_VALUETYPE &&
            (unsigned)CC < array_lengthof(CondCodeActions) &&
            "Table isn't big enough!");
-    /// The lower 5 bits of the SimpleTy index into Nth 2bit set from the 64bit
-    /// value and the upper 27 bits index into the second dimension of the
-    /// array to select what 64bit value to use.
-    CondCodeActions[(unsigned)CC][VT.SimpleTy >> 5]
-      &= ~(uint64_t(3UL)  << (VT.SimpleTy & 0x1F)*2);
-    CondCodeActions[(unsigned)CC][VT.SimpleTy >> 5]
-      |= (uint64_t)Action << (VT.SimpleTy & 0x1F)*2;
+    /// The lower 5 bits of the SimpleTy index into Nth 2bit set from the 32-bit
+    /// value and the upper 27 bits index into the second dimension of the array
+    /// to select what 32-bit value to use.
+    uint32_t Shift = 2 * (VT.SimpleTy & 0xF);
+    CondCodeActions[CC][VT.SimpleTy >> 4] &= ~((uint32_t)0x3 << Shift);
+    CondCodeActions[CC][VT.SimpleTy >> 4] |= (uint32_t)Action << Shift;
   }
 
   /// If Opc/OrigVT is specified as being promoted, the promotion code defaults
@@ -1447,9 +1446,9 @@ private:
   /// indicates how instruction selection should deal with the condition code.
   ///
   /// Because each CC action takes up 2 bits, we need to have the array size be
-  /// large enough to fit all of the value types. This can be done by dividing
-  /// the MVT::LAST_VALUETYPE by 32 and adding one.
-  uint64_t CondCodeActions[ISD::SETCC_INVALID][(MVT::LAST_VALUETYPE / 32) + 1];
+  /// large enough to fit all of the value types. This can be done by rounding
+  /// up the MVT::LAST_VALUETYPE value to the next multiple of 16.
+  uint32_t CondCodeActions[ISD::SETCC_INVALID][(MVT::LAST_VALUETYPE + 15) / 16];
 
   ValueTypeActionImpl ValueTypeActions;
 
@@ -1922,6 +1921,8 @@ public:
     ArgListEntry() : isSExt(false), isZExt(false), isInReg(false),
       isSRet(false), isNest(false), isByVal(false), isReturned(false),
       Alignment(0) { }
+
+    void setAttributes(ImmutableCallSite *CS, unsigned AttrIdx);
   };
   typedef std::vector<ArgListEntry> ArgListTy;
 
@@ -2251,12 +2252,12 @@ public:
   // Instruction Emitting Hooks
   //
 
-  // This method should be implemented by targets that mark instructions with
-  // the 'usesCustomInserter' flag.  These instructions are special in various
-  // ways, which require special support to insert.  The specified MachineInstr
-  // is created but not inserted into any basic blocks, and this method is
-  // called to expand it into a sequence of instructions, potentially also
-  // creating new basic blocks and control flow.
+  /// This method should be implemented by targets that mark instructions with
+  /// the 'usesCustomInserter' flag.  These instructions are special in various
+  /// ways, which require special support to insert.  The specified MachineInstr
+  /// is created but not inserted into any basic blocks, and this method is
+  /// called to expand it into a sequence of instructions, potentially also
+  /// creating new basic blocks and control flow.
   virtual MachineBasicBlock *
     EmitInstrWithCustomInserter(MachineInstr *MI, MachineBasicBlock *MBB) const;
 

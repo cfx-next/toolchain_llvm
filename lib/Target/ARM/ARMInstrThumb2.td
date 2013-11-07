@@ -3027,7 +3027,7 @@ class T2I_crc32<bit C, bits<2> sz, string suffix, SDPatternOperator builtin>
   : T2ThreeRegNoP<(outs rGPR:$Rd), (ins rGPR:$Rn, rGPR:$Rm), NoItinerary,
                !strconcat("crc32", suffix, "\t$Rd, $Rn, $Rm"),
                [(set rGPR:$Rd, (builtin rGPR:$Rn, rGPR:$Rm))]>,
-               Requires<[IsThumb2, HasV8]> {
+               Requires<[IsThumb2, HasV8, HasCRC]> {
   let Inst{31-27} = 0b11111;
   let Inst{26-21} = 0b010110;
   let Inst{20}    = C;
@@ -4329,9 +4329,9 @@ def : t2InstAlias<"tst${p} $Rn, $Rm",
                   (t2TSTrr GPRnopc:$Rn, rGPR:$Rm, pred:$p)>;
 
 // Memory barriers
-def : InstAlias<"dmb${p}", (t2DMB 0xf, pred:$p)>, Requires<[IsThumb2, HasDB]>;
-def : InstAlias<"dsb${p}", (t2DSB 0xf, pred:$p)>, Requires<[IsThumb2, HasDB]>;
-def : InstAlias<"isb${p}", (t2ISB 0xf, pred:$p)>, Requires<[IsThumb2, HasDB]>;
+def : InstAlias<"dmb${p}", (t2DMB 0xf, pred:$p)>, Requires<[HasDB]>;
+def : InstAlias<"dsb${p}", (t2DSB 0xf, pred:$p)>, Requires<[HasDB]>;
+def : InstAlias<"isb${p}", (t2ISB 0xf, pred:$p)>, Requires<[HasDB]>;
 
 // Alias for LDR, LDRB, LDRH, LDRSB, and LDRSH without the ".w" optional
 // width specifier.

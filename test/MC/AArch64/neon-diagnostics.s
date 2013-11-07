@@ -970,23 +970,23 @@
 //----------------------------------------------------------------------
 
         // Mismatched vector types
-        sqshl b0, b1, s0
-        uqshl h0, h1, b0
-        sqshl s0, s1, h0
-        uqshl d0, d1, b0
+        sqshl b0, s1, b0
+        uqshl h0, b1, h0
+        sqshl s0, h1, s0
+        uqshl d0, b1, d0
 
 // CHECK-ERROR: error: invalid operand for instruction
-// CHECK-ERROR:        sqshl b0, b1, s0
-// CHECK-ERROR:                      ^
+// CHECK-ERROR:        sqshl b0, s1, b0
+// CHECK-ERROR:                  ^
 // CHECK-ERROR: error: invalid operand for instruction
-// CHECK-ERROR:        uqshl h0, h1, b0
-// CHECK-ERROR:                      ^
+// CHECK-ERROR:        uqshl h0, b1, h0
+// CHECK-ERROR:                  ^
 // CHECK-ERROR: error: invalid operand for instruction
-// CHECK-ERROR:        sqshl s0, s1, h0
-// CHECK-ERROR:                      ^
+// CHECK-ERROR:        sqshl s0, h1, s0
+// CHECK-ERROR:                  ^
 // CHECK-ERROR: error: invalid operand for instruction
-// CHECK-ERROR:        uqshl d0, d1, b0
-// CHECK-ERROR:                      ^
+// CHECK-ERROR:        uqshl d0, b1, d0
+// CHECK-ERROR:                  ^
 
 //----------------------------------------------------------------------
 // Scalar Integer Rouding Shift Left (Signed, Unsigned)
@@ -4102,6 +4102,62 @@
 // CHECK-ERROR:        st4 {v31.2s-v1.2s}, [x31]
 // CHECK-ERROR:            ^
 
+//----------------------------------------------------------------------
+// Vector post-index load/store multiple N-element structure
+// (class SIMD lselem-post)
+//----------------------------------------------------------------------
+         ld1 {v0.16b}, [x0], #8
+         ld1 {v0.8h, v1.16h}, [x0], x1
+         ld1 {v0.8b, v1.8b, v2.8b, v3.8b}, [x0], #24
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          ld1 {v0.16b}, [x0], #8
+// CHECK-ERROR:                              ^
+// CHECK-ERROR:  error: expected vector type register
+// CHECK-ERROR:          ld1 {v0.8h, v1.16h}, [x0], x1
+// CHECK-ERROR:                      ^
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          ld1 {v0.8b, v1.8b, v2.8b, v3.8b}, [x0], #24
+// CHECK-ERROR:                                                  ^
+
+         ld2 {v0.16b, v1.16b}, [x0], #16
+         ld3 {v5.2s, v6.2s, v7.2s}, [x1], #48
+         ld4 {v31.2d, v0.2d, v1.2d, v2.1d}, [x3], x1
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          ld2 {v0.16b, v1.16b}, [x0], #16
+// CHECK-ERROR:                                      ^
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          ld3 {v5.2s, v6.2s, v7.2s}, [x1], #48
+// CHECK-ERROR:                                           ^
+// CHECK-ERROR:  error: invalid space between two vectors
+// CHECK-ERROR:          ld4 {v31.2d, v0.2d, v1.2d, v2.1d}, [x3], x1
+// CHECK-ERROR:                                     ^
+
+         st1 {v0.16b}, [x0], #8
+         st1 {v0.8h, v1.16h}, [x0], x1
+         st1 {v0.8b, v1.8b, v2.8b, v3.8b}, [x0], #24
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          st1 {v0.16b}, [x0], #8
+// CHECK-ERROR:                              ^
+// CHECK-ERROR:  error: expected vector type register
+// CHECK-ERROR:          st1 {v0.8h, v1.16h}, [x0], x1
+// CHECK-ERROR:                      ^
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          st1 {v0.8b, v1.8b, v2.8b, v3.8b}, [x0], #24
+                                                 ^
+
+         st2 {v0.16b, v1.16b}, [x0], #16
+         st3 {v5.2s, v6.2s, v7.2s}, [x1], #48
+         st4 {v31.2d, v0.2d, v1.2d, v2.1d}, [x3], x1
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          st2 {v0.16b, v1.16b}, [x0], #16
+// CHECK-ERROR:                                      ^
+// CHECK-ERROR:  error: invalid operand for instruction
+// CHECK-ERROR:          st3 {v5.2s, v6.2s, v7.2s}, [x1], #48
+// CHECK-ERROR:                                           ^
+// CHECK-ERROR:  error: invalid space between two vectors
+// CHECK-ERROR:          st4 {v31.2d, v0.2d, v1.2d, v2.1d}, [x3], x1
+// CHECK-ERROR:                                     ^
+
          ins v2.b[16], w1
          ins v7.h[8], w14
          ins v20.s[5], w30
@@ -4398,6 +4454,146 @@
 // CHECK-ERROR:                ^
 
 //----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Equal
+//----------------------------------------------------------------------
+
+         fcmeq s10, h11, s12
+         fcmeq d20, s21, d22
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmeq s10, h11, s12
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmeq d20, s21, d22
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Equal To Zero
+//----------------------------------------------------------------------
+
+         fcmeq h10, s11, #0.0
+         fcmeq d20, s21, #0.0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmeq h10, s11, #0.0
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmeq d20, s21, #0.0
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Greater Than Or Equal
+//----------------------------------------------------------------------
+
+         fcmge s10, h11, s12
+         fcmge d20, s21, d22
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmge s10, h11, s12
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmge d20, s21, d22
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Greater Than Or Equal To Zero
+//----------------------------------------------------------------------
+
+         fcmge h10, s11, #0.0
+         fcmge d20, s21, #0.0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmge h10, s11, #0.0
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmge d20, s21, #0.0
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Greather Than
+//----------------------------------------------------------------------
+
+         fcmgt s10, h11, s12
+         fcmgt d20, s21, d22
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmgt s10, h11, s12
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmgt d20, s21, d22
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Greather Than Zero
+//----------------------------------------------------------------------
+
+         fcmgt h10, s11, #0.0
+         fcmgt d20, s21, #0.0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmgt h10, s11, #0.0
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmgt d20, s21, #0.0
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Less Than Or Equal To Zero
+//----------------------------------------------------------------------
+
+         fcmle h10, s11, #0.0
+         fcmle d20, s21, #0.0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmle h10, s11, #0.0
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmle d20, s21, #0.0
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Compare Mask Less Than
+//----------------------------------------------------------------------
+
+         fcmlt h10, s11, #0.0
+         fcmlt d20, s21, #0.0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmlt h10, s11, #0.0
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          fcmlt d20, s21, #0.0
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Absolute Compare Mask Greater Than Or Equal
+//----------------------------------------------------------------------
+
+         facge s10, h11, s12
+         facge d20, s21, d22
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          facge s10, h11, s12
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          facge d20, s21, d22
+// CHECK-ERROR:                     ^
+
+//----------------------------------------------------------------------
+// Scalar Floating-point Absolute Compare Mask Greater Than
+//----------------------------------------------------------------------
+
+         facgt s10, h11, s12
+         facgt d20, d21, s22
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          facgt s10, h11, s12
+// CHECK-ERROR:                     ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:          facgt d20, d21, s22
+// CHECK-ERROR:                          ^
+        
+//----------------------------------------------------------------------
 // Scalar Signed Saturating Accumulated of Unsigned Value
 //----------------------------------------------------------------------
 
@@ -4557,3 +4753,901 @@
 // CHECK-ERROR: error: invalid operand for instruction
 // CHECK-ERROR:        uqxtn s19, s14
 // CHECK-ERROR:                   ^
+
+//----------------------------------------------------------------------
+// Scalar Signed Shift Right (Immediate)
+//----------------------------------------------------------------------
+        sshr d15, d16, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        sshr d15, d16, #99
+// CHECK-ERROR:                       ^
+
+        sshr d15, s16, #31
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:        sshr d15, s16, #31
+// CHECK-ERROR:                  ^
+
+//----------------------------------------------------------------------
+// Scalar Unsigned Shift Right (Immediate)
+//----------------------------------------------------------------------
+
+        ushr d10, d17, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        ushr d10, d17, #99
+// CHECK-ERROR:                       ^
+
+//----------------------------------------------------------------------
+// Scalar Signed Rounding Shift Right (Immediate)
+//----------------------------------------------------------------------
+
+        srshr d19, d18, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        srshr d19, d18, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Scalar Unigned Rounding Shift Right (Immediate)
+//----------------------------------------------------------------------
+
+        urshr d20, d23, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        urshr d20, d23, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Scalar Signed Shift Right and Accumulate (Immediate)
+//----------------------------------------------------------------------
+
+        ssra d18, d12, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        ssra d18, d12, #99
+// CHECK-ERROR:                       ^
+
+//----------------------------------------------------------------------
+// Scalar Unsigned Shift Right and Accumulate (Immediate)
+//----------------------------------------------------------------------
+
+        usra d20, d13, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        usra d20, d13, #99
+// CHECK-ERROR:                       ^
+
+//----------------------------------------------------------------------
+// Scalar Signed Rounding Shift Right and Accumulate (Immediate)
+//----------------------------------------------------------------------
+
+        srsra d15, d11, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        srsra d15, d11, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Scalar Unsigned Rounding Shift Right and Accumulate (Immediate)
+//----------------------------------------------------------------------
+
+        ursra d18, d10, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        ursra d18, d10, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Scalar Shift Left (Immediate)
+//----------------------------------------------------------------------
+
+        shl d7, d10, #99
+
+// CHECK-ERROR: error: expected integer in range [0, 63]
+// CHECK-ERROR:        shl d7, d10, #99
+// CHECK-ERROR:                     ^
+
+        shl d7, s16, #31
+        
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:        shl d7, s16, #31
+// CHECK-ERROR:                ^
+
+//----------------------------------------------------------------------
+// Signed Saturating Shift Left (Immediate)
+//----------------------------------------------------------------------
+
+        sqshl b11, b19, #99
+        sqshl h13, h18, #99
+        sqshl s14, s17, #99
+        sqshl d15, d16, #99
+
+// CHECK-ERROR: error: expected integer in range [0, 7]
+// CHECK-ERROR:        sqshl b11, b19, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 15]
+// CHECK-ERROR:        sqshl h13, h18, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 31]
+// CHECK-ERROR:        sqshl s14, s17, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 63]
+// CHECK-ERROR:        sqshl d15, d16, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Unsigned Saturating Shift Left (Immediate)
+//----------------------------------------------------------------------
+
+        uqshl b18, b15, #99
+        uqshl h11, h18, #99
+        uqshl s14, s19, #99
+        uqshl d15, d12, #99
+
+// CHECK-ERROR: error: expected integer in range [0, 7]
+// CHECK-ERROR:        uqshl b18, b15, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 15]
+// CHECK-ERROR:        uqshl h11, h18, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 31]
+// CHECK-ERROR:        uqshl s14, s19, #99
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [0, 63]
+// CHECK-ERROR:        uqshl d15, d12, #99
+// CHECK-ERROR:                        ^
+
+//----------------------------------------------------------------------
+// Signed Saturating Shift Left Unsigned (Immediate)
+//----------------------------------------------------------------------
+
+        sqshlu b15, b18, #99
+        sqshlu h19, h17, #99
+        sqshlu s16, s14, #99
+        sqshlu d11, d13, #99
+
+// CHECK-ERROR: error: expected integer in range [0, 7]
+// CHECK-ERROR:        sqshlu  b15, b18, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [0, 15]
+// CHECK-ERROR:        sqshlu  h19, h17, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [0, 31]
+// CHECK-ERROR:        sqshlu  s16, s14, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [0, 63]
+// CHECK-ERROR:        sqshlu  d11, d13, #99
+// CHECK-ERROR:                          ^
+
+//----------------------------------------------------------------------
+// Shift Right And Insert (Immediate)
+//----------------------------------------------------------------------
+
+        sri d10, d12, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        sri d10, d12, #99
+// CHECK-ERROR:                      ^
+
+//----------------------------------------------------------------------
+// Shift Left And Insert (Immediate)
+//----------------------------------------------------------------------
+
+        sli d10, d14, #99
+
+// CHECK-ERROR: error: expected integer in range [0, 63]
+// CHECK-ERROR:        sli d10, d14, #99
+// CHECK-ERROR:                      ^
+
+//----------------------------------------------------------------------
+// Signed Saturating Shift Right Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        sqshrn b10, h15, #99
+        sqshrn h17, s10, #99
+        sqshrn s18, d10, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        sqshrn  b10, h15, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        sqshrn  h17, s10, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        sqshrn  s18, d10, #99
+// CHECK-ERROR:                          ^
+        
+//----------------------------------------------------------------------
+// Unsigned Saturating Shift Right Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        uqshrn b12, h10, #99
+        uqshrn h10, s14, #99
+        uqshrn s10, d12, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        uqshrn  b12, h10, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        uqshrn  h10, s14, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        uqshrn  s10, d12, #99
+// CHECK-ERROR:                          ^
+        
+//----------------------------------------------------------------------
+// Signed Saturating Rounded Shift Right Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        sqrshrn b10, h13, #99
+        sqrshrn h15, s10, #99
+        sqrshrn s15, d12, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        sqrshrn b10, h13, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        sqrshrn h15, s10, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        sqrshrn s15, d12, #99
+// CHECK-ERROR:                          ^
+        
+//----------------------------------------------------------------------
+// Unsigned Saturating Rounded Shift Right Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        uqrshrn b10, h12, #99
+        uqrshrn h12, s10, #99
+        uqrshrn s10, d10, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        uqrshrn b10, h12, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        uqrshrn h12, s10, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        uqrshrn s10, d10, #99
+// CHECK-ERROR:                          ^
+
+//----------------------------------------------------------------------
+// Signed Saturating Shift Right Unsigned Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        sqshrun b15, h10, #99
+        sqshrun h20, s14, #99
+        sqshrun s10, d15, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        sqshrun b15, h10, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        sqshrun h20, s14, #99
+// CHECK-ERROR:                          ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        sqshrun s10, d15, #99
+// CHECK-ERROR:                          ^
+
+//----------------------------------------------------------------------
+// Signed Saturating Rounded Shift Right Unsigned Narrow (Immediate)
+//----------------------------------------------------------------------
+
+        sqrshrun b17, h10, #99
+        sqrshrun h10, s13, #99
+        sqrshrun s22, d16, #99
+
+// CHECK-ERROR: error: expected integer in range [1, 8]
+// CHECK-ERROR:        sqrshrun b17, h10, #99
+// CHECK-ERROR:                           ^
+// CHECK-ERROR: error: expected integer in range [1, 16]
+// CHECK-ERROR:        sqrshrun h10, s13, #99
+// CHECK-ERROR:                           ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        sqrshrun s22, d16, #99
+// CHECK-ERROR:                           ^
+
+//----------------------------------------------------------------------
+// Scalar Signed Fixed-point Convert To Floating-Point (Immediate)
+//----------------------------------------------------------------------
+
+    scvtf s22, s13, #0
+    scvtf s22, s13, #33
+    scvtf d21, d12, #65
+    scvtf d21, s12, #31
+        
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        scvtf s22, s13, #0
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        scvtf s22, s13, #33
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        scvtf d21, d12, #65
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:        scvtf d21, s12, #31
+// CHECK-ERROR:                   ^
+
+//----------------------------------------------------------------------
+// Scalar Unsigned Fixed-point Convert To Floating-Point (Immediate)
+//----------------------------------------------------------------------
+
+    ucvtf s22, s13, #34
+    ucvtf d21, d14, #65
+    ucvtf d21, s14, #64
+        
+// CHECK-ERROR: error: expected integer in range [1, 32]
+// CHECK-ERROR:        ucvtf s22, s13, #34
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: expected integer in range [1, 64]
+// CHECK-ERROR:        ucvtf d21, d14, #65
+// CHECK-ERROR:                        ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:        ucvtf d21, s14, #64
+// CHECK-ERROR:                   ^
+
+//----------------------------------------------------------------------
+// Scalar Unsigned Saturating Extract Narrow
+//----------------------------------------------------------------------
+
+        aese v0.8h, v1.8h
+        aese v0.4s, v1.4s
+        aese v0.2d, v1.2d
+        aesd v0.8h, v1.8h
+        aesmc v0.8h, v1.8h
+        aesimc v0.8h, v1.8h
+
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aese v0.8h, v1.8h
+// CHECK:                 ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aese v0.4s, v1.4s
+// CHECK:                 ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aese v0.2d, v1.2d
+// CHECK:                 ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aesd v0.8h, v1.8h
+// CHECK:                 ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aesmc v0.8h, v1.8h
+// CHECK:                  ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         aesimc v0.8h, v1.8h
+// CHECK:                   ^
+
+        sha1h b0, b1
+        sha1h h0, h1
+        sha1h d0, d1
+        sha1h q0, q1
+        sha1su1 v0.16b, v1.16b
+        sha1su1 v0.8h, v1.8h
+        sha1su1 v0.2d, v1.2d
+        sha256su0 v0.16b, v1.16b
+
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1h b0, b1
+// CHECK:               ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1h h0, h1
+// CHECK:               ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1h d0, d1
+// CHECK:               ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1h q0, q1
+// CHECK:               ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su1 v0.16b, v1.16b
+// CHECK:                    ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su1 v0.8h, v1.8h
+// CHECK:                    ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su1 v0.2d, v1.2d
+// CHECK:                    ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha256su0 v0.16b, v1.16b
+// CHECK:                      ^
+
+        sha1c q0, q1, v2.4s
+        sha1p q0, q1, v2.4s
+        sha1m q0, q1, v2.4s
+        sha1su0 v0.16b, v1.16b, v2.16b
+        sha1su0 v0.8h, v1.8h, v2.8h
+        sha1su0 v0.2d, v1.2d, v2.2d
+        sha256h q0, q1, q2
+        sha256h v0.4s, v1.4s, v2.4s
+        sha256h2 q0, q1, q2
+        sha256su1 v0.16b, v1.16b, v2.16b
+
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1c q0, q1, v2.4s
+// CHECK:                   ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1p q0, q1, v2.4s
+// CHECK:                   ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1m q0, q1, v2.4s
+// CHECK:                   ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su0 v0.16b, v1.16b, v2.16b
+// CHECK:                    ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su0 v0.8h, v1.8h, v2.8h
+// CHECK:                    ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha1su0 v0.2d, v1.2d, v2.2d
+// CHECK:                    ^
+// CHECK:  error: too few operands for instruction
+// CHECK:         sha256h q0, q1, q2
+// CHECK:         ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha256h v0.4s, v1.4s, v2.4s
+// CHECK:                    ^
+// CHECK:  error: too few operands for instruction
+// CHECK:         sha256h2 q0, q1, q2
+// CHECK:         ^
+// CHECK:  error: invalid operand for instruction
+// CHECK:         sha256su1 v0.16b, v1.16b, v2.16b
+// CHECK:                      ^
+
+//----------------------------------------------------------------------
+// Bitwise extract
+//----------------------------------------------------------------------
+
+        ext v0.8b, v1.8b, v2.4h, #0x3
+        ext v0.4h, v1.4h, v2.4h, #0x3
+        ext v0.2s, v1.2s, v2.2s, #0x1
+        ext v0.1d, v1.1d, v2.1d, #0x0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.8b, v1.8b, v2.4h, #0x3
+// CHECK-ERROR:                              ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.4h, v1.4h, v2.4h, #0x3
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.2s, v1.2s, v2.2s, #0x1
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.1d, v1.1d, v2.1d, #0x0
+// CHECK-ERROR:                ^
+
+        ext v0.16b, v1.16b, v2.8h, #0x3
+        ext v0.8h, v1.8h, v2.8h, #0x3
+        ext v0.4s, v1.4s, v2.4s, #0x1
+        ext v0.2d, v1.2d, v2.2d, #0x0
+
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.16b, v1.16b, v2.8h, #0x3
+// CHECK-ERROR:                                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.8h, v1.8h, v2.8h, #0x3
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.4s, v1.4s, v2.4s, #0x1
+// CHECK-ERROR:                ^
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR:         ext v0.2d, v1.2d, v2.2d, #0x0
+// CHECK-ERROR:                ^
+
+
+//----------------------------------------------------------------------
+// Permutation with 3 vectors
+//----------------------------------------------------------------------
+
+        uzp1 v0.16b, v1.8b, v2.8b
+        uzp1 v0.8b, v1.4b, v2.4b
+        uzp1 v0.8h, v1.4h, v2.4h
+        uzp1 v0.4h, v1.2h, v2.2h
+        uzp1 v0.4s, v1.2s, v2.2s
+        uzp1 v0.2s, v1.1s, v2.1s
+        uzp1 v0.2d, v1.1d, v2.1d
+        uzp1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4289:22: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4290:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4291:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4292:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4293:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4294:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4295:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4296:17: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        uzp2 v0.16b, v1.8b, v2.8b
+        uzp2 v0.8b, v1.4b, v2.4b
+        uzp2 v0.8h, v1.4h, v2.4h
+        uzp2 v0.4h, v1.2h, v2.2h
+        uzp2 v0.4s, v1.2s, v2.2s
+        uzp2 v0.2s, v1.1s, v2.1s
+        uzp2 v0.2d, v1.1d, v2.1d
+        uzp2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4298:22: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4299:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4300:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4301:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4302:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4303:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4304:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4305:17: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        zip1 v0.16b, v1.8b, v2.8b
+        zip1 v0.8b, v1.4b, v2.4b
+        zip1 v0.8h, v1.4h, v2.4h
+        zip1 v0.4h, v1.2h, v2.2h
+        zip1 v0.4s, v1.2s, v2.2s
+        zip1 v0.2s, v1.1s, v2.1s
+        zip1 v0.2d, v1.1d, v2.1d
+        zip1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4307:22: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4308:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4309:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4310:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4311:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4312:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4313:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4314:17: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        zip2 v0.16b, v1.8b, v2.8b
+        zip2 v0.8b, v1.4b, v2.4b
+        zip2 v0.8h, v1.4h, v2.4h
+        zip2 v0.4h, v1.2h, v2.2h
+        zip2 v0.4s, v1.2s, v2.2s
+        zip2 v0.2s, v1.1s, v2.1s
+        zip2 v0.2d, v1.1d, v2.1d
+        zip2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4316:22: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4317:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4318:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4319:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4320:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4321:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4322:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4323:17: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        trn1 v0.16b, v1.8b, v2.8b
+        trn1 v0.8b, v1.4b, v2.4b
+        trn1 v0.8h, v1.4h, v2.4h
+        trn1 v0.4h, v1.2h, v2.2h
+        trn1 v0.4s, v1.2s, v2.2s
+        trn1 v0.2s, v1.1s, v2.1s
+        trn1 v0.2d, v1.1d, v2.1d
+        trn1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4325:22: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4326:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4327:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4328:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4329:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4330:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4331:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4332:17: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        trn2 v0.16b, v1.8b, v2.8b
+        trn2 v0.8b, v1.4b, v2.4b
+        trn2 v0.8h, v1.4h, v2.4h
+        trn2 v0.4h, v1.2h, v2.2h
+        trn2 v0.4s, v1.2s, v2.2s
+        trn2 v0.2s, v1.1s, v2.1s
+        trn2 v0.2d, v1.1d, v2.1d
+        trn2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4334:22: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4335:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4336:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4337:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4338:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4339:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4340:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4341:17: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+//----------------------------------------------------------------------
+// Permutation with 3 vectors
+//----------------------------------------------------------------------
+
+        uzp1 v0.16b, v1.8b, v2.8b
+        uzp1 v0.8b, v1.4b, v2.4b
+        uzp1 v0.8h, v1.4h, v2.4h
+        uzp1 v0.4h, v1.2h, v2.2h
+        uzp1 v0.4s, v1.2s, v2.2s
+        uzp1 v0.2s, v1.1s, v2.1s
+        uzp1 v0.2d, v1.1d, v2.1d
+        uzp1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4289:22: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4290:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4291:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4292:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4293:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4294:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4295:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4296:17: error: invalid operand for instruction
+// CHECK-ERROR         uzp1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        uzp2 v0.16b, v1.8b, v2.8b
+        uzp2 v0.8b, v1.4b, v2.4b
+        uzp2 v0.8h, v1.4h, v2.4h
+        uzp2 v0.4h, v1.2h, v2.2h
+        uzp2 v0.4s, v1.2s, v2.2s
+        uzp2 v0.2s, v1.1s, v2.1s
+        uzp2 v0.2d, v1.1d, v2.1d
+        uzp2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4298:22: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4299:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4300:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4301:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4302:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4303:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4304:21: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4305:17: error: invalid operand for instruction
+// CHECK-ERROR         uzp2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        zip1 v0.16b, v1.8b, v2.8b
+        zip1 v0.8b, v1.4b, v2.4b
+        zip1 v0.8h, v1.4h, v2.4h
+        zip1 v0.4h, v1.2h, v2.2h
+        zip1 v0.4s, v1.2s, v2.2s
+        zip1 v0.2s, v1.1s, v2.1s
+        zip1 v0.2d, v1.1d, v2.1d
+        zip1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4307:22: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4308:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4309:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4310:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4311:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4312:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4313:21: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4314:17: error: invalid operand for instruction
+// CHECK-ERROR         zip1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        zip2 v0.16b, v1.8b, v2.8b
+        zip2 v0.8b, v1.4b, v2.4b
+        zip2 v0.8h, v1.4h, v2.4h
+        zip2 v0.4h, v1.2h, v2.2h
+        zip2 v0.4s, v1.2s, v2.2s
+        zip2 v0.2s, v1.1s, v2.1s
+        zip2 v0.2d, v1.1d, v2.1d
+        zip2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4316:22: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4317:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4318:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4319:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4320:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4321:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4322:21: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4323:17: error: invalid operand for instruction
+// CHECK-ERROR         zip2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        trn1 v0.16b, v1.8b, v2.8b
+        trn1 v0.8b, v1.4b, v2.4b
+        trn1 v0.8h, v1.4h, v2.4h
+        trn1 v0.4h, v1.2h, v2.2h
+        trn1 v0.4s, v1.2s, v2.2s
+        trn1 v0.2s, v1.1s, v2.1s
+        trn1 v0.2d, v1.1d, v2.1d
+        trn1 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4325:22: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4326:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4327:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4328:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4329:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4330:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4331:21: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4332:17: error: invalid operand for instruction
+// CHECK-ERROR         trn1 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^
+
+        trn2 v0.16b, v1.8b, v2.8b
+        trn2 v0.8b, v1.4b, v2.4b
+        trn2 v0.8h, v1.4h, v2.4h
+        trn2 v0.4h, v1.2h, v2.2h
+        trn2 v0.4s, v1.2s, v2.2s
+        trn2 v0.2s, v1.1s, v2.1s
+        trn2 v0.2d, v1.1d, v2.1d
+        trn2 v0.1d, v1.1d, v2.1d
+
+// CHECK-ERROR <stdin>:4334:22: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.16b, v1.8b, v2.8b
+// CHECK-ERROR                      ^
+// CHECK-ERROR <stdin>:4335:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.8b, v1.4b, v2.4b
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4336:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.8h, v1.4h, v2.4h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4337:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.4h, v1.2h, v2.2h
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4338:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.4s, v1.2s, v2.2s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4339:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.2s, v1.1s, v2.1s
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4340:21: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.2d, v1.1d, v2.1d
+// CHECK-ERROR                     ^
+// CHECK-ERROR <stdin>:4341:17: error: invalid operand for instruction
+// CHECK-ERROR         trn2 v0.1d, v1.1d, v2.1d
+// CHECK-ERROR                 ^

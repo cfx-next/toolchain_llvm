@@ -22,6 +22,8 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/Target/Mangler.h"
 #include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
@@ -33,7 +35,8 @@ using namespace llvm;
 /// CompileUnit - Compile unit constructor.
 CompileUnit::CompileUnit(unsigned UID, DIE *D, const MDNode *N, AsmPrinter *A,
                          DwarfDebug *DW, DwarfUnits *DWU)
-    : UniqueID(UID), Node(N), CUDie(D), Asm(A), DD(DW), DU(DWU), IndexTyDie(0) {
+    : UniqueID(UID), Node(N), CUDie(D), Asm(A), DD(DW), DU(DWU), IndexTyDie(0),
+      DebugInfoOffset(0) {
   DIEIntegerOne = new (DIEValueAllocator) DIEInteger(1);
   insertDIE(N, D);
 }
@@ -93,6 +96,35 @@ int64_t CompileUnit::getDefaultLowerBound() const {
   }
 
   return -1;
+}
+
+/// Check whether the DIE for this MDNode can be shared across CUs.
+static bool isShareableAcrossCUs(const MDNode *N) {
+  // When the MDNode can be part of the type system, the DIE can be
+  // shared across CUs.
+  return DIDescriptor(N).isType() ||
+         (DIDescriptor(N).isSubprogram() && !DISubprogram(N).isDefinition());
+}
+
+/// getDIE - Returns the debug information entry map slot for the
+/// specified debug variable. We delegate the request to DwarfDebug
+/// when the DIE for this MDNode can be shared across CUs. The mappings
+/// will be kept in DwarfDebug for shareable DIEs.
+DIE *CompileUnit::getDIE(const MDNode *N) const {
+  if (isShareableAcrossCUs(N))
+    return DD->getDIE(N);
+  return MDNodeToDieMap.lookup(N);
+}
+
+/// insertDIE - Insert DIE into the map. We delegate the request to DwarfDebug
+/// when the DIE for this MDNode can be shared across CUs. The mappings
+/// will be kept in DwarfDebug for shareable DIEs.
+void CompileUnit::insertDIE(const MDNode *N, DIE *D) {
+  if (isShareableAcrossCUs(N)) {
+    DD->insertDIE(N, D);
+    return;
+  }
+  MDNodeToDieMap.insert(std::make_pair(N, D));
 }
 
 /// addFlag - Add a flag that is true.
@@ -242,8 +274,21 @@ void CompileUnit::addDelta(DIE *Die, dwarf::Attribute Attribute, dwarf::Form For
 /// addDIEEntry - Add a DIE attribute data and value.
 ///
 void CompileUnit::addDIEEntry(DIE *Die, dwarf::Attribute Attribute, DIE *Entry) {
-  // We currently only use ref4.
-  Die->addValue(Attribute, dwarf::DW_FORM_ref4, createDIEEntry(Entry));
+  addDIEEntry(Die, Attribute, createDIEEntry(Entry));
+}
+
+void CompileUnit::addDIEEntry(DIE *Die, dwarf::Attribute Attribute,
+                              DIEEntry *Entry) {
+  const DIE *DieCU = Die->getCompileUnitOrNull();
+  const DIE *EntryCU = Entry->getEntry()->getCompileUnitOrNull();
+  if (!DieCU)
+    // We assume that Die belongs to this CU, if it is not linked to any CU yet.
+    DieCU = getCUDie();
+  if (!EntryCU)
+    EntryCU = getCUDie();
+  Die->addValue(Attribute, EntryCU == DieCU ? dwarf::DW_FORM_ref4
+                                            : dwarf::DW_FORM_ref_addr,
+                Entry);
 }
 
 /// Create a DIE with the given Tag, add the DIE to its parent, and
@@ -826,34 +871,26 @@ DIE *CompileUnit::getOrCreateContextDIE(DIScope Context) {
     return getDIE(Context);
 }
 
-/// addToContextOwner - Add Die into the list of its context owner's children.
-void CompileUnit::addToContextOwner(DIE *Die, DIScope Context) {
-  assert(!Die->getParent());
-  if (DIE *ContextDIE = getOrCreateContextDIE(Context)) {
-    if (Die->getParent()) {
-      // While creating the context, if this is a type member, we will have
-      // added the child to the context already.
-      assert(Die->getParent() == ContextDIE);
-      return;
-    }
-    ContextDIE->addChild(Die);
-  } else
-    addDie(Die);
-}
-
 /// getOrCreateTypeDIE - Find existing DIE or create new DIE for the
 /// given DIType.
 DIE *CompileUnit::getOrCreateTypeDIE(const MDNode *TyNode) {
   DIType Ty(TyNode);
   if (!Ty.isType())
     return NULL;
+
+  // Construct the context before querying for the existence of the DIE in case
+  // such construction creates the DIE.
+  DIE *ContextDIE = getOrCreateContextDIE(resolve(Ty.getContext()));
+  if (!ContextDIE)
+    ContextDIE = CUDie.get();
+
   DIE *TyDIE = getDIE(Ty);
   if (TyDIE)
     return TyDIE;
 
   // Create new type.
-  TyDIE = new DIE(Ty.getTag());
-  insertDIE(Ty, TyDIE);
+  TyDIE = createAndAddDIE(Ty.getTag(), *ContextDIE, Ty);
+
   if (Ty.isBasicType())
     constructTypeDIE(*TyDIE, DIBasicType(Ty));
   else if (Ty.isCompositeType())
@@ -876,7 +913,6 @@ DIE *CompileUnit::getOrCreateTypeDIE(const MDNode *TyNode) {
     addAccelType(Ty.getName(), std::make_pair(TyDIE, Flags));
   }
 
-  addToContextOwner(TyDIE, resolve(Ty.getContext()));
   return TyDIE;
 }
 
@@ -888,7 +924,7 @@ void CompileUnit::addType(DIE *Entity, DIType Ty, dwarf::Attribute Attribute) {
   DIEEntry *Entry = getDIEEntry(Ty);
   // If it exists then use the existing value.
   if (Entry) {
-    Entity->addValue(Attribute, dwarf::DW_FORM_ref4, Entry);
+    addDIEEntry(Entity, Attribute, Entry);
     return;
   }
 
@@ -898,7 +934,7 @@ void CompileUnit::addType(DIE *Entity, DIType Ty, dwarf::Attribute Attribute) {
   // Set up proxy.
   Entry = createDIEEntry(Buffer);
   insertDIEEntry(Ty, Entry);
-  Entity->addValue(Attribute, dwarf::DW_FORM_ref4, Entry);
+  addDIEEntry(Entity, Attribute, Entry);
 
   // If this is a complete composite type then include it in the
   // list of global types.
@@ -1308,7 +1344,7 @@ CompileUnit::constructTemplateValueParameterDIE(DIE &Buffer,
       // For declaration non-type template parameters (such as global values and
       // functions)
       DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
-      addOpAddress(Block, Asm->Mang->getSymbol(GV));
+      addOpAddress(Block, Asm->getSymbol(GV));
       // Emit DW_OP_stack_value to use the address as the immediate value of the
       // parameter, rather than a pointer to it.
       addUInt(Block, dwarf::DW_FORM_data1, dwarf::DW_OP_stack_value);
@@ -1327,11 +1363,19 @@ CompileUnit::constructTemplateValueParameterDIE(DIE &Buffer,
 
 /// getOrCreateNameSpace - Create a DIE for DINameSpace.
 DIE *CompileUnit::getOrCreateNameSpace(DINameSpace NS) {
+  // Construct the context before querying for the existence of the DIE in case
+  // such construction creates the DIE.
+  DIE *ContextDIE = getOrCreateContextDIE(NS.getContext());
+  if (!ContextDIE)
+    // If the context is null, DIE should belong to the CU we call construct
+    // function on.
+    ContextDIE = CUDie.get();
+
   DIE *NDie = getDIE(NS);
   if (NDie)
     return NDie;
-  NDie = new DIE(dwarf::DW_TAG_namespace);
-  insertDIE(NS, NDie);
+  NDie = createAndAddDIE(dwarf::DW_TAG_namespace, *ContextDIE, NS);
+
   if (!NS.getName().empty()) {
     addString(NDie, dwarf::DW_AT_name, NS.getName());
     addAccelNamespace(NS.getName(), NDie);
@@ -1339,7 +1383,6 @@ DIE *CompileUnit::getOrCreateNameSpace(DINameSpace NS) {
   } else
     addAccelNamespace("(anonymous namespace)", NDie);
   addSourceLine(NDie, NS);
-  addToContextOwner(NDie, NS.getContext());
   return NDie;
 }
 
@@ -1506,9 +1549,14 @@ void CompileUnit::createGlobalVariableDIE(const MDNode *N) {
   // If this is not a static data member definition, create the variable
   // DIE and add the initial set of attributes to it.
   if (!VariableDIE) {
-    VariableDIE = new DIE(GV.getTag());
+    // Construct the context before querying for the existence of the DIE in
+    // case such construction creates the DIE.
+    DIE *ContextDIE = getOrCreateContextDIE(GVContext);
+    if (!ContextDIE)
+      ContextDIE = CUDie.get();
+
     // Add to map.
-    insertDIE(N, VariableDIE);
+    VariableDIE = createAndAddDIE(GV.getTag(), *ContextDIE, N);
 
     // Add name and type.
     addString(VariableDIE, dwarf::DW_AT_name, GV.getDisplayName());
@@ -1520,8 +1568,6 @@ void CompileUnit::createGlobalVariableDIE(const MDNode *N) {
 
     // Add line number info.
     addSourceLine(VariableDIE, GV);
-    // Add to context owner.
-    addToContextOwner(VariableDIE, GVContext);
   }
 
   // Add location.
@@ -1531,7 +1577,7 @@ void CompileUnit::createGlobalVariableDIE(const MDNode *N) {
   if (isGlobalVariable) {
     addToAccelTable = true;
     DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
-    const MCSymbol *Sym = Asm->Mang->getSymbol(GV.getGlobal());
+    const MCSymbol *Sym = Asm->getSymbol(GV.getGlobal());
     if (GV.getGlobal()->isThreadLocal()) {
       // FIXME: Make this work with -gsplit-dwarf.
       unsigned PointerSize = Asm->getDataLayout().getPointerSize();
@@ -1591,7 +1637,7 @@ void CompileUnit::createGlobalVariableDIE(const MDNode *N) {
     // GV is a merged global.
     DIEBlock *Block = new (DIEValueAllocator) DIEBlock();
     Value *Ptr = CE->getOperand(0);
-    addOpAddress(Block, Asm->Mang->getSymbol(cast<GlobalValue>(Ptr)));
+    addOpAddress(Block, Asm->getSymbol(cast<GlobalValue>(Ptr)));
     addUInt(Block, dwarf::DW_FORM_data1, dwarf::DW_OP_constu);
     SmallVector<Value *, 3> Idx(CE->op_begin() + 1, CE->op_end());
     addUInt(Block, dwarf::DW_FORM_udata,
@@ -1784,33 +1830,6 @@ void CompileUnit::constructMemberDIE(DIE &Buffer, DIDerivedType DT) {
   DIEBlock *MemLocationDie = new (DIEValueAllocator) DIEBlock();
   addUInt(MemLocationDie, dwarf::DW_FORM_data1, dwarf::DW_OP_plus_uconst);
 
-  uint64_t Size = DT.getSizeInBits();
-  uint64_t FieldSize = getBaseTypeSize(DD, DT);
-
-  if (Size != FieldSize) {
-    // Handle bitfield.
-    addUInt(MemberDie, dwarf::DW_AT_byte_size, None,
-            getBaseTypeSize(DD, DT) >> 3);
-    addUInt(MemberDie, dwarf::DW_AT_bit_size, None, DT.getSizeInBits());
-
-    uint64_t Offset = DT.getOffsetInBits();
-    uint64_t AlignMask = ~(DT.getAlignInBits() - 1);
-    uint64_t HiMark = (Offset + FieldSize) & AlignMask;
-    uint64_t FieldOffset = (HiMark - FieldSize);
-    Offset -= FieldOffset;
-
-    // Maybe we need to work from the other end.
-    if (Asm->getDataLayout().isLittleEndian())
-      Offset = FieldSize - (Offset + Size);
-    addUInt(MemberDie, dwarf::DW_AT_bit_offset, None, Offset);
-
-    // Here WD_AT_data_member_location points to the anonymous
-    // field that includes this bit field.
-    addUInt(MemLocationDie, dwarf::DW_FORM_udata, FieldOffset >> 3);
-
-  } else
-    // This is not a bitfield.
-    addUInt(MemLocationDie, dwarf::DW_FORM_udata, DT.getOffsetInBits() >> 3);
 
   if (DT.getTag() == dwarf::DW_TAG_inheritance && DT.isVirtual()) {
 
@@ -1828,8 +1847,37 @@ void CompileUnit::constructMemberDIE(DIE &Buffer, DIDerivedType DT) {
     addUInt(VBaseLocationDie, dwarf::DW_FORM_data1, dwarf::DW_OP_plus);
 
     addBlock(MemberDie, dwarf::DW_AT_data_member_location, VBaseLocationDie);
-  } else
-    addBlock(MemberDie, dwarf::DW_AT_data_member_location, MemLocationDie);
+  } else {
+    uint64_t Size = DT.getSizeInBits();
+    uint64_t FieldSize = getBaseTypeSize(DD, DT);
+    uint64_t OffsetInBytes;
+
+    if (Size != FieldSize) {
+      // Handle bitfield.
+      addUInt(MemberDie, dwarf::DW_AT_byte_size, None,
+              getBaseTypeSize(DD, DT) >> 3);
+      addUInt(MemberDie, dwarf::DW_AT_bit_size, None, DT.getSizeInBits());
+
+      uint64_t Offset = DT.getOffsetInBits();
+      uint64_t AlignMask = ~(DT.getAlignInBits() - 1);
+      uint64_t HiMark = (Offset + FieldSize) & AlignMask;
+      uint64_t FieldOffset = (HiMark - FieldSize);
+      Offset -= FieldOffset;
+
+      // Maybe we need to work from the other end.
+      if (Asm->getDataLayout().isLittleEndian())
+        Offset = FieldSize - (Offset + Size);
+      addUInt(MemberDie, dwarf::DW_AT_bit_offset, None, Offset);
+
+      // Here WD_AT_data_member_location points to the anonymous
+      // field that includes this bit field.
+      OffsetInBytes = FieldOffset >> 3;
+    } else
+      // This is not a bitfield.
+      OffsetInBytes = DT.getOffsetInBits() >> 3;
+    addUInt(MemberDie, dwarf::DW_AT_data_member_location, None,
+            OffsetInBytes);
+  }
 
   if (DT.isProtected())
     addUInt(MemberDie, dwarf::DW_AT_accessibility, dwarf::DW_FORM_data1,
@@ -1897,4 +1945,15 @@ DIE *CompileUnit::getOrCreateStaticMemberDIE(const DIDerivedType DT) {
     addConstantFPValue(StaticMemberDIE, CFP);
 
   return StaticMemberDIE;
+}
+
+void CompileUnit::emitHeader(const MCSection *ASection,
+                             const MCSymbol *ASectionSym) {
+  Asm->OutStreamer.AddComment("DWARF version number");
+  Asm->EmitInt16(DD->getDwarfVersion());
+  Asm->OutStreamer.AddComment("Offset Into Abbrev. Section");
+  Asm->EmitSectionOffset(Asm->GetTempSymbol(ASection->getLabelBeginName()),
+                         ASectionSym);
+  Asm->OutStreamer.AddComment("Address Size (in bytes)");
+  Asm->EmitInt8(Asm->getDataLayout().getPointerSize());
 }
