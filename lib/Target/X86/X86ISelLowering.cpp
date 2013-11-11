@@ -16,6 +16,7 @@
 #include "X86ISelLowering.h"
 #include "Utils/X86ShuffleDecode.h"
 #include "X86.h"
+#include "X86CallingConv.h"
 #include "X86InstrBuilder.h"
 #include "X86TargetMachine.h"
 #include "X86TargetObjectFile.h"
@@ -1770,6 +1771,11 @@ X86TargetLowering::CanLowerReturn(CallingConv::ID CallConv,
   CCState CCInfo(CallConv, isVarArg, MF, getTargetMachine(),
                  RVLocs, Context);
   return CCInfo.CheckReturn(Outs, RetCC_X86);
+}
+
+const uint16_t *X86TargetLowering::getScratchRegisters(CallingConv::ID) const {
+  static const uint16_t ScratchRegs[] = { X86::R11, 0 };
+  return ScratchRegs;
 }
 
 SDValue
