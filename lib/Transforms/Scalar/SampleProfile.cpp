@@ -27,6 +27,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/DebugInfo/DIContext.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -48,11 +49,9 @@ using namespace llvm;
 
 // Command line option to specify the file to read samples from. This is
 // mainly used for debugging.
-static cl::opt<std::string>
-SampleProfileFilename("sample-profile-file", cl::init("samples.prof"),
-                      cl::value_desc("filename"),
-                      cl::desc("Profile file loaded by -sample-profile"),
-                      cl::Hidden);
+static cl::opt<std::string> SampleProfileFile(
+    "sample-profile-file", cl::init(""), cl::value_desc("filename"),
+    cl::desc("Profile file loaded by -sample-profile"), cl::Hidden);
 
 namespace {
 /// \brief Sample-based profile reader.
@@ -80,18 +79,18 @@ namespace {
 ///      be relative to the start of the function.
 class SampleProfile {
 public:
-  SampleProfile(std::string filename) : Profiles(0), Filename(filename) {}
+  SampleProfile(StringRef F) : Profiles(0), Filename(F) {}
 
-  virtual void dump();
-  virtual bool loadText();
-  virtual bool loadNative() { llvm_unreachable("not implemented"); }
-  virtual bool emitAnnotations(Function &F);
+  void dump();
+  void loadText();
+  void loadNative() { llvm_unreachable("not implemented"); }
+  bool emitAnnotations(Function &F);
   void printFunctionProfile(raw_ostream &OS, StringRef FName);
   void dumpFunctionProfile(StringRef FName);
 
 protected:
   typedef DenseMap<uint32_t, uint32_t> BodySampleMap;
-  typedef DenseMap<BasicBlock*, uint32_t> BlockWeightMap;
+  typedef DenseMap<BasicBlock *, uint32_t> BlockWeightMap;
 
   /// \brief Representation of the runtime profile for a function.
   ///
@@ -122,8 +121,6 @@ protected:
     BlockWeightMap BlockWeights;
   };
 
-  typedef StringMap<FunctionProfile> FunctionProfileMap;
-
   uint32_t getInstWeight(Instruction &I, unsigned FirstLineno,
                          BodySampleMap &BodySamples);
   uint32_t computeBlockWeight(BasicBlock *B, unsigned FirstLineno,
@@ -134,7 +131,7 @@ protected:
   /// The profile of every function executed at runtime is collected
   /// in the structure FunctionProfile. This maps function objects
   /// to their corresponding profiles.
-  FunctionProfileMap Profiles;
+  StringMap<FunctionProfile> Profiles;
 
   /// \brief Path name to the file holding the profile data.
   ///
@@ -142,7 +139,7 @@ protected:
   /// independently. If possible, the profiler should have a text
   /// version of the profile format to be used in constructing test
   /// cases and debugging.
-  std::string Filename;
+  StringRef Filename;
 };
 
 /// \brief Loader class for text-based profiles.
@@ -156,7 +153,7 @@ protected:
 /// reader. It should be moved to the Support library and made more general.
 class ExternalProfileTextLoader {
 public:
-  ExternalProfileTextLoader(std::string filename) : Filename(filename) {
+  ExternalProfileTextLoader(StringRef F) : Filename(F) {
     error_code EC;
     EC = MemoryBuffer::getFile(Filename, Buffer);
     if (EC)
@@ -199,7 +196,7 @@ private:
   int64_t Lineno;
 
   /// \brief Path name where to the profile file.
-  std::string Filename;
+  StringRef Filename;
 };
 
 /// \brief Sample profile pass.
@@ -212,13 +209,12 @@ public:
   // Class identification, replacement for typeinfo
   static char ID;
 
-  SampleProfileLoader() : FunctionPass(ID), Profiler(0) {
+  SampleProfileLoader(StringRef Name = SampleProfileFile)
+      : FunctionPass(ID), Profiler(0), Filename(Name) {
     initializeSampleProfileLoaderPass(*PassRegistry::getPassRegistry());
   }
 
   virtual bool doInitialization(Module &M);
-
-  ~SampleProfileLoader() { delete Profiler; }
 
   void dump() { Profiler->dump(); }
 
@@ -230,11 +226,12 @@ public:
     AU.setPreservesCFG();
   }
 
-  bool loadProfile();
-
 protected:
   /// \brief Profile reader object.
-  SampleProfile *Profiler;
+  OwningPtr<SampleProfile> Profiler;
+
+  /// \brief Name of the profile file to load.
+  StringRef Filename;
 };
 }
 
@@ -264,8 +261,8 @@ void SampleProfile::dumpFunctionProfile(StringRef FName) {
 
 /// \brief Dump all the function profiles found.
 void SampleProfile::dump() {
-  for (FunctionProfileMap::const_iterator I = Profiles.begin(),
-                                          E = Profiles.end();
+  for (StringMap<FunctionProfile>::const_iterator I = Profiles.begin(),
+                                                  E = Profiles.end();
        I != E; ++I)
     dumpFunctionProfile(I->getKey());
 }
@@ -300,18 +297,17 @@ void SampleProfile::dump() {
 /// for debugging purposes, but it should not be used to generate
 /// profiles for large programs, as the representation is extremely
 /// inefficient.
-bool SampleProfile::loadText() {
+void SampleProfile::loadText() {
   ExternalProfileTextLoader Loader(Filename);
 
   // Read the symbol table.
-  std::string Line = Loader.readLine().str();
+  StringRef Line = Loader.readLine();
   if (Line != "symbol table")
     Loader.reportParseError("Expected 'symbol table', found " + Line);
-  Regex num("[0-9]+");
-  Line = Loader.readLine().str();
-  if (!num.match(Line))
+  int NumSymbols;
+  Line = Loader.readLine();
+  if (Line.getAsInteger(10, NumSymbols))
     Loader.reportParseError("Expected a number, found " + Line);
-  int NumSymbols = atoi(Line.c_str());
   for (int I = 0; I < NumSymbols; I++) {
     StringRef FName = Loader.readLine();
     FunctionProfile &FProfile = Profiles[FName];
@@ -327,35 +323,35 @@ bool SampleProfile::loadText() {
   Regex LineSample("^([0-9]+): ([0-9]+)$");
   while (!Loader.atEOF()) {
     SmallVector<StringRef, 4> Matches;
-    Line = Loader.readLine().str();
+    Line = Loader.readLine();
     if (!HeadRE.match(Line, &Matches))
       Loader.reportParseError("Expected 'mangled_name:NUM:NUM:NUM', found " +
                               Line);
     assert(Matches.size() == 5);
     StringRef FName = Matches[1];
-    unsigned NumSamples = atoi(Matches[2].str().c_str());
-    unsigned NumHeadSamples = atoi(Matches[3].str().c_str());
-    unsigned NumSampledLines = atoi(Matches[4].str().c_str());
+    unsigned NumSamples, NumHeadSamples, NumSampledLines;
+    Matches[2].getAsInteger(10, NumSamples);
+    Matches[3].getAsInteger(10, NumHeadSamples);
+    Matches[4].getAsInteger(10, NumSampledLines);
     FunctionProfile &FProfile = Profiles[FName];
     FProfile.TotalSamples += NumSamples;
     FProfile.TotalHeadSamples += NumHeadSamples;
     BodySampleMap &SampleMap = FProfile.BodySamples;
     unsigned I;
     for (I = 0; I < NumSampledLines && !Loader.atEOF(); I++) {
-      Line = Loader.readLine().str();
+      Line = Loader.readLine();
       if (!LineSample.match(Line, &Matches))
         Loader.reportParseError("Expected 'NUM: NUM', found " + Line);
       assert(Matches.size() == 3);
-      unsigned LineOffset = atoi(Matches[1].str().c_str());
-      unsigned NumSamples = atoi(Matches[2].str().c_str());
+      unsigned LineOffset, NumSamples;
+      Matches[1].getAsInteger(10, LineOffset);
+      Matches[2].getAsInteger(10, NumSamples);
       SampleMap[LineOffset] += NumSamples;
     }
 
     if (I < NumSampledLines)
       Loader.reportParseError("Unexpected end of file");
   }
-
-  return true;
 }
 
 /// \brief Get the weight for an instruction.
@@ -374,8 +370,7 @@ bool SampleProfile::loadText() {
 uint32_t SampleProfile::getInstWeight(Instruction &Inst, unsigned FirstLineno,
                                       BodySampleMap &BodySamples) {
   unsigned LOffset = Inst.getDebugLoc().getLine() - FirstLineno + 1;
-  return (BodySamples.find(LOffset) != BodySamples.end()) ? BodySamples[LOffset]
-                                                          : 0;
+  return BodySamples.lookup(LOffset);
 }
 
 /// \brief Compute the weight of a basic block.
@@ -427,12 +422,12 @@ uint32_t SampleProfile::computeBlockWeight(BasicBlock *B, unsigned FirstLineno,
 /// \param F The function to query.
 bool SampleProfile::emitAnnotations(Function &F) {
   bool Changed = false;
-  StringRef name = F.getName();
-  FunctionProfile &FProfile = Profiles[name];
-  BodySampleMap &BodySamples = FProfile.BodySamples;
-  Instruction &FirstInst = *(inst_begin(F));
-  unsigned FirstLineno = FirstInst.getDebugLoc().getLine();
-  llvm::MDBuilder MDB(F.getContext());
+  FunctionProfile &FProfile = Profiles[F.getName()];
+  unsigned FirstLineno = inst_begin(F)->getDebugLoc().getLine();
+  MDBuilder MDB(F.getContext());
+
+  // Clear the block weights cache.
+  FProfile.BlockWeights.clear();
 
   // When we find a branch instruction: For each edge E out of the branch,
   // the weight of E is the weight of the target block.
@@ -448,7 +443,8 @@ bool SampleProfile::emitAnnotations(Function &F) {
     unsigned NSuccs = TI->getNumSuccessors();
     for (unsigned I = 0; I < NSuccs; ++I) {
       BasicBlock *Succ = TI->getSuccessor(I);
-      uint32_t Weight = computeBlockWeight(Succ, FirstLineno, BodySamples);
+      uint32_t Weight =
+          computeBlockWeight(Succ, FirstLineno, FProfile.BodySamples);
       Weights.push_back(Weight);
     }
 
@@ -468,20 +464,16 @@ bool SampleProfileLoader::runOnFunction(Function &F) {
   return Profiler->emitAnnotations(F);
 }
 
-bool SampleProfileLoader::loadProfile() {
-  Profiler = new SampleProfile(SampleProfileFilename);
-  return Profiler->loadText();
-}
-
 bool SampleProfileLoader::doInitialization(Module &M) {
-  return loadProfile();
+  Profiler.reset(new SampleProfile(Filename));
+  Profiler->loadText();
+  return true;
 }
 
 FunctionPass *llvm::createSampleProfileLoaderPass() {
-  return new SampleProfileLoader();
+  return new SampleProfileLoader(SampleProfileFile);
 }
 
-FunctionPass *llvm::createSampleProfileLoaderPass(std::string name) {
-  SampleProfileFilename = name;
-  return new SampleProfileLoader();
+FunctionPass *llvm::createSampleProfileLoaderPass(StringRef Name) {
+  return new SampleProfileLoader(Name);
 }

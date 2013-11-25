@@ -1635,19 +1635,8 @@ static SDValue tryFoldToZero(SDLoc DL, const TargetLowering &TLI, EVT VT,
                              bool LegalOperations, bool LegalTypes) {
   if (!VT.isVector())
     return DAG.getConstant(0, VT);
-  if (!LegalOperations || TLI.isOperationLegal(ISD::BUILD_VECTOR, VT)) {
-    // Produce a vector of zeros.
-    EVT ElemTy = VT.getVectorElementType();
-    if (LegalTypes && TLI.getTypeAction(*DAG.getContext(), ElemTy) ==
-                      TargetLowering::TypePromoteInteger)
-      ElemTy = TLI.getTypeToTransformTo(*DAG.getContext(), ElemTy);
-    assert((!LegalTypes || TLI.isTypeLegal(ElemTy)) &&
-           "Type for zero vector elements is not legal");
-    SDValue El = DAG.getConstant(0, ElemTy);
-    std::vector<SDValue> Ops(VT.getVectorNumElements(), El);
-    return DAG.getNode(ISD::BUILD_VECTOR, DL, VT,
-      &Ops[0], Ops.size());
-  }
+  if (!LegalOperations || TLI.isOperationLegal(ISD::BUILD_VECTOR, VT))
+    return DAG.getConstant(0, VT);
   return SDValue();
 }
 
@@ -3576,7 +3565,7 @@ SDValue DAGCombiner::visitXOR(SDNode *N) {
   }
   // fold (xor (and x, y), y) -> (and (not x), y)
   if (N0.getOpcode() == ISD::AND && N0.getNode()->hasOneUse() &&
-      N0->getOperand(1) == N1 && isTypeLegal(VT.getScalarType())) {
+      N0->getOperand(1) == N1) {
     SDValue X = N0->getOperand(0);
     SDValue NotX = DAG.getNOT(SDLoc(X), X, VT);
     AddToWorkList(NotX.getNode());
@@ -4327,6 +4316,23 @@ SDValue DAGCombiner::visitSELECT(SDNode *N) {
   return SDValue();
 }
 
+static
+std::pair<SDValue, SDValue> SplitVSETCC(const SDNode *N, SelectionDAG &DAG) {
+  SDLoc DL(N);
+  EVT LoVT, HiVT;
+  llvm::tie(LoVT, HiVT) = DAG.GetSplitDestVTs(N->getValueType(0));
+
+  // Split the inputs.
+  SDValue Lo, Hi, LL, LH, RL, RH;
+  llvm::tie(LL, LH) = DAG.SplitVectorOperand(N, 0);
+  llvm::tie(RL, RH) = DAG.SplitVectorOperand(N, 1);
+
+  Lo = DAG.getNode(N->getOpcode(), DL, LoVT, LL, RL, N->getOperand(2));
+  Hi = DAG.getNode(N->getOpcode(), DL, HiVT, LH, RH, N->getOperand(2));
+
+  return std::make_pair(Lo, Hi);
+}
+
 SDValue DAGCombiner::visitVSELECT(SDNode *N) {
   SDValue N0 = N->getOperand(0);
   SDValue N1 = N->getOperand(1);
@@ -4362,6 +4368,34 @@ SDValue DAGCombiner::visitVSELECT(SDNode *N) {
       AddToWorkList(Add.getNode());
       return DAG.getNode(ISD::XOR, DL, VT, Add, Shift);
     }
+  }
+
+  // If the VSELECT result requires splitting and the mask is provided by a
+  // SETCC, then split both nodes and its operands before legalization. This
+  // prevents the type legalizer from unrolling SETCC into scalar comparisons
+  // and enables future optimizations (e.g. min/max pattern matching on X86).
+  if (N0.getOpcode() == ISD::SETCC) {
+    EVT VT = N->getValueType(0);
+
+    // Check if any splitting is required.
+    if (TLI.getTypeAction(*DAG.getContext(), VT) !=
+        TargetLowering::TypeSplitVector)
+      return SDValue();
+
+    SDValue Lo, Hi, CCLo, CCHi, LL, LH, RL, RH;
+    llvm::tie(CCLo, CCHi) = SplitVSETCC(N0.getNode(), DAG);
+    llvm::tie(LL, LH) = DAG.SplitVectorOperand(N, 1);
+    llvm::tie(RL, RH) = DAG.SplitVectorOperand(N, 2);
+
+    Lo = DAG.getNode(N->getOpcode(), DL, LL.getValueType(), CCLo, LL, RL);
+    Hi = DAG.getNode(N->getOpcode(), DL, LH.getValueType(), CCHi, LH, RH);
+
+    // Add the new VSELECT nodes to the work list in case they need to be split
+    // again.
+    AddToWorkList(Lo.getNode());
+    AddToWorkList(Hi.getNode());
+
+    return DAG.getNode(ISD::CONCAT_VECTORS, DL, VT, Lo, Hi);
   }
 
   return SDValue();
@@ -5745,7 +5779,8 @@ SDValue DAGCombiner::visitBITCAST(SDNode *N) {
   if (ISD::isNormalLoad(N0.getNode()) && N0.hasOneUse() &&
       // Do not change the width of a volatile load.
       !cast<LoadSDNode>(N0)->isVolatile() &&
-      (!LegalOperations || TLI.isOperationLegal(ISD::LOAD, VT))) {
+      (!LegalOperations || TLI.isOperationLegal(ISD::LOAD, VT)) &&
+      TLI.isLoadBitCastBeneficial(N0.getValueType(), VT)) {
     LoadSDNode *LN0 = cast<LoadSDNode>(N0);
     unsigned Align = TLI.getDataLayout()->
       getABITypeAlignment(VT.getTypeForEVT(*DAG.getContext()));
@@ -8657,6 +8692,11 @@ bool DAGCombiner::MergeConsecutiveStores(StoreSDNode* St) {
         Index = STn;
         break;
       } else if (LoadSDNode *Ldn = dyn_cast<LoadSDNode>(NextInChain)) {
+        if (Ldn->isVolatile()) {
+          Index = NULL;
+          break;
+        }
+
         // Save the load node for later. Continue the scan.
         AliasLoadNodes.push_back(Ldn);
         NextInChain = Ldn->getChain().getNode();

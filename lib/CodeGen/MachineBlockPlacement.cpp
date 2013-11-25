@@ -58,6 +58,13 @@ static cl::opt<unsigned> AlignAllBlock("align-all-blocks",
                                                 "blocks in the function."),
                                        cl::init(0), cl::Hidden);
 
+// FIXME: Find a good default for this flag and remove the flag.
+static cl::opt<unsigned>
+ExitBlockBias("block-placement-exit-block-bias",
+              cl::desc("Block frequency percentage a loop exit block needs "
+                       "over the original exit to be considered the new exit."),
+              cl::init(0), cl::Hidden);
+
 namespace {
 class BlockChain;
 /// \brief Type for our function-wide basic block -> block chain mapping.
@@ -360,7 +367,8 @@ MachineBasicBlock *MachineBlockPlacement::selectBestSuccessor(
     // any CFG constraints.
     if (SuccChain.LoopPredecessors != 0) {
       if (SuccProb < HotProb) {
-        DEBUG(dbgs() << "    " << getBlockName(*SI) << " -> CFG conflict\n");
+        DEBUG(dbgs() << "    " << getBlockName(*SI) << " -> " << SuccProb
+                     << " (prob) (CFG conflict)\n");
         continue;
       }
 
@@ -383,8 +391,8 @@ MachineBasicBlock *MachineBlockPlacement::selectBestSuccessor(
         }
       }
       if (BadCFGConflict) {
-        DEBUG(dbgs() << "    " << getBlockName(*SI)
-                               << " -> non-cold CFG conflict\n");
+        DEBUG(dbgs() << "    " << getBlockName(*SI) << " -> " << SuccProb
+                     << " (prob) (non-cold CFG conflict)\n");
         continue;
       }
     }
@@ -691,13 +699,15 @@ MachineBlockPlacement::findBestLoopExit(MachineFunction &F,
       DEBUG(dbgs() << "    exiting: " << getBlockName(*I) << " -> "
                    << getBlockName(*SI) << " [L:" << SuccLoopDepth
                    << "] (" << ExitEdgeFreq << ")\n");
-      // Note that we slightly bias this toward an existing layout successor to
-      // retain incoming order in the absence of better information.
-      // FIXME: Should we bias this more strongly? It's pretty weak.
+      // Note that we bias this toward an existing layout successor to retain
+      // incoming order in the absence of better information. The exit must have
+      // a frequency higher than the current exit before we consider breaking
+      // the layout.
+      BranchProbability Bias(100 - ExitBlockBias, 100);
       if (!ExitingBB || BestExitLoopDepth < SuccLoopDepth ||
           ExitEdgeFreq > BestExitEdgeFreq ||
           ((*I)->isLayoutSuccessor(*SI) &&
-           !(ExitEdgeFreq < BestExitEdgeFreq))) {
+           !(ExitEdgeFreq < BestExitEdgeFreq * Bias))) {
         BestExitEdgeFreq = ExitEdgeFreq;
         ExitingBB = *I;
       }

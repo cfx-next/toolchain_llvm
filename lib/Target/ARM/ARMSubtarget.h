@@ -31,7 +31,8 @@ class TargetOptions;
 class ARMSubtarget : public ARMGenSubtargetInfo {
 protected:
   enum ARMProcFamilyEnum {
-    Others, CortexA5, CortexA8, CortexA9, CortexA15, CortexR5, Swift, CortexA53, CortexA57
+    Others, CortexA5, CortexA7, CortexA8, CortexA9, CortexA12, CortexA15, 
+    CortexR5, Swift, CortexA53, CortexA57
   };
   enum ARMProcClassEnum {
     None, AClass, RClass, MClass
@@ -176,6 +177,10 @@ protected:
   /// accesses for some types.  For details, see
   /// ARMTargetLowering::allowsUnalignedMemoryAccesses().
   bool AllowsUnalignedMem;
+
+  /// RestrictIT - If true, the subtarget disallows generation of deprecated IT
+  ///  blocks to conform to ARMv8 rule.
+  bool RestrictIT;
 
   /// Thumb2DSP - If true, the subtarget supports the v7 DSP (saturating arith
   /// and such) instructions in Thumb2 code.
@@ -326,6 +331,8 @@ public:
   bool supportsTailCall() const { return SupportsTailCall; }
 
   bool allowsUnalignedMem() const { return AllowsUnalignedMem; }
+
+  bool restrictIT() const { return RestrictIT; }
 
   const std::string & getCPUString() const { return CPUString; }
 

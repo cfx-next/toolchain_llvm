@@ -951,12 +951,21 @@ void DebugInfoFinder::reset() {
   Scopes.clear();
   NodesSeen.clear();
   TypeIdentifierMap.clear();
+  TypeMapInitialized = false;
+}
+
+void DebugInfoFinder::InitializeTypeMap(const Module &M) {
+  if (!TypeMapInitialized)
+    if (NamedMDNode *CU_Nodes = M.getNamedMetadata("llvm.dbg.cu")) {
+      TypeIdentifierMap = generateDITypeIdentifierMap(CU_Nodes);
+      TypeMapInitialized = true;
+    }
 }
 
 /// processModule - Process entire module and collect debug info.
 void DebugInfoFinder::processModule(const Module &M) {
+  InitializeTypeMap(M);
   if (NamedMDNode *CU_Nodes = M.getNamedMetadata("llvm.dbg.cu")) {
-    TypeIdentifierMap = generateDITypeIdentifierMap(CU_Nodes);
     for (unsigned i = 0, e = CU_Nodes->getNumOperands(); i != e; ++i) {
       DICompileUnit CU(CU_Nodes->getOperand(i));
       addCompileUnit(CU);
@@ -993,11 +1002,12 @@ void DebugInfoFinder::processModule(const Module &M) {
 }
 
 /// processLocation - Process DILocation.
-void DebugInfoFinder::processLocation(DILocation Loc) {
+void DebugInfoFinder::processLocation(const Module &M, DILocation Loc) {
   if (!Loc)
     return;
+  InitializeTypeMap(M);
   processScope(Loc.getScope());
-  processLocation(Loc.getOrigLocation());
+  processLocation(M, Loc.getOrigLocation());
 }
 
 /// processType - Process DIType.
@@ -1084,10 +1094,12 @@ void DebugInfoFinder::processSubprogram(DISubprogram SP) {
 }
 
 /// processDeclare - Process DbgDeclareInst.
-void DebugInfoFinder::processDeclare(const DbgDeclareInst *DDI) {
+void DebugInfoFinder::processDeclare(const Module &M,
+                                     const DbgDeclareInst *DDI) {
   MDNode *N = dyn_cast<MDNode>(DDI->getVariable());
   if (!N)
     return;
+  InitializeTypeMap(M);
 
   DIDescriptor DV(N);
   if (!DV.isVariable())
@@ -1099,10 +1111,11 @@ void DebugInfoFinder::processDeclare(const DbgDeclareInst *DDI) {
   processType(DIVariable(N).getType());
 }
 
-void DebugInfoFinder::processValue(const DbgValueInst *DVI) {
+void DebugInfoFinder::processValue(const Module &M, const DbgValueInst *DVI) {
   MDNode *N = dyn_cast<MDNode>(DVI->getVariable());
   if (!N)
     return;
+  InitializeTypeMap(M);
 
   DIDescriptor DV(N);
   if (!DV.isVariable())
@@ -1412,4 +1425,56 @@ DIScopeRef DIDescriptor::getFieldAs<DIScopeRef>(unsigned Elt) const {
 /// Specialize getFieldAs to handle fields that are references to DITypes.
 template <> DITypeRef DIDescriptor::getFieldAs<DITypeRef>(unsigned Elt) const {
   return DITypeRef(getField(DbgNode, Elt));
+}
+
+/// Strip debug info in the module if it exists.
+/// To do this, we remove all calls to the debugger intrinsics and any named
+/// metadata for debugging. We also remove debug locations for instructions.
+/// Return true if module is modified.
+bool llvm::StripDebugInfo(Module &M) {
+
+  bool Changed = false;
+
+  // Remove all of the calls to the debugger intrinsics, and remove them from
+  // the module.
+  if (Function *Declare = M.getFunction("llvm.dbg.declare")) {
+    while (!Declare->use_empty()) {
+      CallInst *CI = cast<CallInst>(Declare->use_back());
+      CI->eraseFromParent();
+    }
+    Declare->eraseFromParent();
+    Changed = true;
+  }
+
+  if (Function *DbgVal = M.getFunction("llvm.dbg.value")) {
+    while (!DbgVal->use_empty()) {
+      CallInst *CI = cast<CallInst>(DbgVal->use_back());
+      CI->eraseFromParent();
+    }
+    DbgVal->eraseFromParent();
+    Changed = true;
+  }
+
+  for (Module::named_metadata_iterator NMI = M.named_metadata_begin(),
+         NME = M.named_metadata_end(); NMI != NME;) {
+    NamedMDNode *NMD = NMI;
+    ++NMI;
+    if (NMD->getName().startswith("llvm.dbg.")) {
+      NMD->eraseFromParent();
+      Changed = true;
+    }
+  }
+
+  for (Module::iterator MI = M.begin(), ME = M.end(); MI != ME; ++MI)
+    for (Function::iterator FI = MI->begin(), FE = MI->end(); FI != FE;
+         ++FI)
+      for (BasicBlock::iterator BI = FI->begin(), BE = FI->end(); BI != BE;
+           ++BI) {
+        if (!BI->getDebugLoc().isUnknown()) {
+          Changed = true;
+          BI->setDebugLoc(DebugLoc());
+        }
+      }
+
+  return Changed;
 }

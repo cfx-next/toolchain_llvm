@@ -1064,8 +1064,10 @@ SDValue SelectionDAGBuilder::getValueImpl(const Value *V) {
     if (const GlobalValue *GV = dyn_cast<GlobalValue>(C))
       return DAG.getGlobalAddress(GV, getCurSDLoc(), VT);
 
-    if (isa<ConstantPointerNull>(C))
-      return DAG.getConstant(0, TLI->getPointerTy());
+    if (isa<ConstantPointerNull>(C)) {
+      unsigned AS = V->getType()->getPointerAddressSpace();
+      return DAG.getConstant(0, TLI->getPointerTy(AS));
+    }
 
     if (const ConstantFP *CFP = dyn_cast<ConstantFP>(C))
       return DAG.getConstantFP(*CFP, VT);
@@ -2936,6 +2938,21 @@ void SelectionDAGBuilder::visitBitCast(const User &I) {
                              DestVT, N)); // convert types.
   else
     setValue(&I, N);            // noop cast.
+}
+
+void SelectionDAGBuilder::visitAddrSpaceCast(const User &I) {
+  const TargetLowering &TLI = DAG.getTargetLoweringInfo();
+  const Value *SV = I.getOperand(0);
+  SDValue N = getValue(SV);
+  EVT DestVT = TM.getTargetLowering()->getValueType(I.getType());
+
+  unsigned SrcAS = SV->getType()->getPointerAddressSpace();
+  unsigned DestAS = I.getType()->getPointerAddressSpace();
+
+  if (!TLI.isNoopAddrSpaceCast(SrcAS, DestAS))
+    N = DAG.getAddrSpaceCast(getCurSDLoc(), DestVT, N, SrcAS, DestAS);
+
+  setValue(&I, N);
 }
 
 void SelectionDAGBuilder::visitInsertElement(const User &I) {
@@ -6764,6 +6781,23 @@ SelectionDAGBuilder::LowerCallOperands(const CallInst &CI, unsigned ArgIdx,
   return TLI->LowerCallTo(CLI);
 }
 
+/// \brief Add a stack map intrinsic call's live variable operands to a stackmap
+/// or patchpoint target node's operand list.
+static void addStackMapLiveVars(const CallInst &CI, unsigned StartIdx,
+                                SmallVectorImpl<SDValue> &Ops,
+                                SelectionDAGBuilder &Builder) {
+  for (unsigned i = StartIdx, e = CI.getNumArgOperands(); i != e; ++i) {
+    SDValue OpVal = Builder.getValue(CI.getArgOperand(i));
+    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(OpVal)) {
+      Ops.push_back(
+        Builder.DAG.getTargetConstant(StackMaps::ConstantOp, MVT::i64));
+      Ops.push_back(
+        Builder.DAG.getTargetConstant(C->getSExtValue(), MVT::i64));
+    } else
+      Ops.push_back(OpVal);
+  }
+}
+
 /// \brief Lower llvm.experimental.stackmap directly to its target opcode.
 void SelectionDAGBuilder::visitStackmap(const CallInst &CI) {
   // void @llvm.experimental.stackmap(i32 <id>, i32 <numShadowBytes>,
@@ -6797,8 +6831,7 @@ void SelectionDAGBuilder::visitStackmap(const CallInst &CI) {
         cast<ConstantSDNode>(tmp)->getZExtValue(), MVT::i32));
   }
   // Push live variables for the stack map.
-  for (unsigned i = 2, e = CI.getNumArgOperands(); i != e; ++i)
-    Ops.push_back(getValue(CI.getArgOperand(i)));
+  addStackMapLiveVars(CI, 2, Ops, *this);
 
   // Push the chain (this is originally the first operand of the call, but
   // becomes now the last or second to last operand).
@@ -6826,7 +6859,7 @@ void SelectionDAGBuilder::visitStackmap(const CallInst &CI) {
 /// \brief Lower llvm.experimental.patchpoint directly to its target opcode.
 void SelectionDAGBuilder::visitPatchpoint(const CallInst &CI) {
   // void|i64 @llvm.experimental.patchpoint.void|i64(i32 <id>,
-  //                                                 i32 <numNopBytes>,
+  //                                                 i32 <numBytes>,
   //                                                 i8* <target>,
   //                                                 i32 <numArgs>,
   //                                                 [Args...],
@@ -6838,17 +6871,19 @@ void SelectionDAGBuilder::visitPatchpoint(const CallInst &CI) {
   SDValue Callee = getValue(CI.getOperand(2)); // <target>
 
   // Get the real number of arguments participating in the call <numArgs>
-  unsigned NumArgs =
-    cast<ConstantSDNode>(getValue(CI.getArgOperand(3)))->getZExtValue();
+  SDValue NArgVal = getValue(CI.getArgOperand(PatchPointOpers::NArgPos));
+  unsigned NumArgs = cast<ConstantSDNode>(NArgVal)->getZExtValue();
 
   // Skip the four meta args: <id>, <numNopBytes>, <target>, <numArgs>
-  assert(CI.getNumArgOperands() >= NumArgs + 4 &&
+  // Intrinsics include all meta-operands up to but not including CC.
+  unsigned NumMetaOpers = PatchPointOpers::CCPos;
+  assert(CI.getNumArgOperands() >= NumMetaOpers + NumArgs &&
          "Not enough arguments provided to the patchpoint intrinsic");
 
   // For AnyRegCC the arguments are lowered later on manually.
   unsigned NumCallArgs = isAnyRegCC ? 0 : NumArgs;
   std::pair<SDValue, SDValue> Result =
-    LowerCallOperands(CI, 4, NumCallArgs, Callee, isAnyRegCC);
+    LowerCallOperands(CI, NumMetaOpers, NumCallArgs, Callee, isAnyRegCC);
 
   // Set the root to the target-lowered call chain.
   SDValue Chain = Result.second;
@@ -6868,13 +6903,16 @@ void SelectionDAGBuilder::visitPatchpoint(const CallInst &CI) {
   // Replace the target specific call node with the patchable intrinsic.
   SmallVector<SDValue, 8> Ops;
 
-  // Add the <id> and <numNopBytes> constants.
-  for (unsigned i = 0; i < 2; ++i) {
-    SDValue tmp = getValue(CI.getOperand(i));
-    Ops.push_back(DAG.getTargetConstant(
-        cast<ConstantSDNode>(tmp)->getZExtValue(), MVT::i32));
-  }
+  // Add the <id> and <numBytes> constants.
+  SDValue IDVal = getValue(CI.getOperand(PatchPointOpers::IDPos));
+  Ops.push_back(DAG.getTargetConstant(
+                  cast<ConstantSDNode>(IDVal)->getZExtValue(), MVT::i32));
+  SDValue NBytesVal = getValue(CI.getOperand(PatchPointOpers::NBytesPos));
+  Ops.push_back(DAG.getTargetConstant(
+                  cast<ConstantSDNode>(NBytesVal)->getZExtValue(), MVT::i32));
+
   // Assume that the Callee is a constant address.
+  // FIXME: handle function symbols in the future.
   Ops.push_back(
     DAG.getIntPtrConstant(cast<ConstantSDNode>(Callee)->getZExtValue(),
                           /*isTarget=*/true));
@@ -6892,25 +6930,16 @@ void SelectionDAGBuilder::visitPatchpoint(const CallInst &CI) {
   // Add the arguments we omitted previously. The register allocator should
   // place these in any free register.
   if (isAnyRegCC)
-    for (unsigned i = 4, e = NumArgs + 4; i != e; ++i)
+    for (unsigned i = NumMetaOpers, e = NumMetaOpers + NumArgs; i != e; ++i)
       Ops.push_back(getValue(CI.getArgOperand(i)));
 
-  // Push the arguments from the call instruction.
+  // Push the arguments from the call instruction up to the register mask.
   SDNode::op_iterator e = hasGlue ? Call->op_end()-2 : Call->op_end()-1;
   for (SDNode::op_iterator i = Call->op_begin()+2; i != e; ++i)
     Ops.push_back(*i);
 
   // Push live variables for the stack map.
-  for (unsigned i = NumArgs + 4, e = CI.getNumArgOperands(); i != e; ++i) {
-    SDValue OpVal = getValue(CI.getArgOperand(i));
-    if (ConstantSDNode *C = dyn_cast<ConstantSDNode>(OpVal)) {
-      Ops.push_back(
-        DAG.getTargetConstant(StackMaps::ConstantOp, MVT::i64));
-      Ops.push_back(
-        DAG.getTargetConstant(C->getSExtValue(), MVT::i64));
-    } else
-      Ops.push_back(OpVal);
-  }
+  addStackMapLiveVars(CI, NumMetaOpers + NumArgs, Ops, *this);
 
   // Push the register mask info.
   if (hasGlue)

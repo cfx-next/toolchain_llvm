@@ -394,6 +394,7 @@ bool X86AsmPrinter::printAsmMRegister(const MachineOperand &MO, char Mode,
     Reg = getX86SubSuperRegister(Reg, MVT::i32);
     break;
   case 'q': // Print DImode register
+    // FIXME: gcc will actually print e instead of r for 32-bit.
     Reg = getX86SubSuperRegister(Reg, MVT::i64);
     break;
   }
@@ -534,6 +535,7 @@ void X86AsmPrinter::EmitStartOfAsmFile(Module &M) {
       // cause the process to terminate immediately.  LLVM does not know how to
       // register any SEH handlers, so its object files should be safe.
       S->setAbsolute();
+      OutStreamer.EmitSymbolAttribute(S, MCSA_Global);
       OutStreamer.EmitAssignment(
           S, MCConstantExpr::Create(int64_t(1), MMI->getContext()));
     }

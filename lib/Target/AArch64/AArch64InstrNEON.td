@@ -46,6 +46,10 @@ def SDTARMVSH : SDTypeProfile<1, 2, [SDTCisVec<0>, SDTCisSameAs<0, 1>,
 def Neon_sqrshlImm   : SDNode<"AArch64ISD::NEON_QSHLs", SDTARMVSH>;
 def Neon_uqrshlImm   : SDNode<"AArch64ISD::NEON_QSHLu", SDTARMVSH>;
 
+def SDTVSHUF : SDTypeProfile<1, 1, [SDTCisVec<0>, SDTCisSameAs<0, 1>]>;
+def Neon_rev64    : SDNode<"AArch64ISD::NEON_REV64", SDTVSHUF>;
+def Neon_rev32    : SDNode<"AArch64ISD::NEON_REV32", SDTVSHUF>;
+def Neon_rev16    : SDNode<"AArch64ISD::NEON_REV16", SDTVSHUF>;
 def Neon_vdup : SDNode<"AArch64ISD::NEON_VDUP", SDTypeProfile<1, 1,
                        [SDTCisVec<0>]>>;
 def Neon_vduplane : SDNode<"AArch64ISD::NEON_VDUPLANE", SDTypeProfile<1, 2,
@@ -328,29 +332,16 @@ def : NeonInstAlias<"mov $Rd.8b, $Rn.8b",
 def : NeonInstAlias<"mov $Rd.16b, $Rn.16b",
                     (ORRvvv_16B VPR128:$Rd, VPR128:$Rn, VPR128:$Rn), 0>;
 
-def Neon_immAllOnes: PatLeaf<(Neon_movi (i32 timm), (i32 imm)), [{
-  ConstantSDNode *ImmConstVal = cast<ConstantSDNode>(N->getOperand(0));
-  ConstantSDNode *OpCmodeConstVal = cast<ConstantSDNode>(N->getOperand(1));
-  unsigned EltBits;
-  uint64_t EltVal = A64Imms::decodeNeonModImm(ImmConstVal->getZExtValue(),
-    OpCmodeConstVal->getZExtValue(), EltBits);
-  return (EltBits == 8 && EltVal == 0xff);
-}]>;
-
-def Neon_immAllZeros: PatLeaf<(Neon_movi (i32 timm), (i32 imm)), [{
-  ConstantSDNode *ImmConstVal = cast<ConstantSDNode>(N->getOperand(0));
-  ConstantSDNode *OpCmodeConstVal = cast<ConstantSDNode>(N->getOperand(1));
-  unsigned EltBits;
-  uint64_t EltVal = A64Imms::decodeNeonModImm(ImmConstVal->getZExtValue(),
-    OpCmodeConstVal->getZExtValue(), EltBits);
-  return (EltBits == 8 && EltVal == 0x0);
-}]>;
-
+// The MOVI instruction takes two immediate operands.  The first is the
+// immediate encoding, while the second is the cmode.  A cmode of 14, or
+// 0b1110, produces a MOVI operation, rather than a MVNI, ORR, or BIC.
+def Neon_AllZero : PatFrag<(ops), (Neon_movi (i32 0), (i32 14))>;
+def Neon_AllOne : PatFrag<(ops), (Neon_movi (i32 255), (i32 14))>;
 
 def Neon_not8B  : PatFrag<(ops node:$in),
-                          (xor node:$in, (bitconvert (v8i8 Neon_immAllOnes)))>;
+                          (xor node:$in, (bitconvert (v8i8 Neon_AllOne)))>;
 def Neon_not16B : PatFrag<(ops node:$in),
-                          (xor node:$in, (bitconvert (v16i8 Neon_immAllOnes)))>;
+                          (xor node:$in, (bitconvert (v16i8 Neon_AllOne)))>;
 
 def Neon_orn8B : PatFrag<(ops node:$Rn, node:$Rm),
                          (or node:$Rn, (Neon_not8B node:$Rm))>;
@@ -1599,16 +1590,46 @@ def Neon_High8H  : PatFrag<(ops node:$in),
                            (extract_subvector (v8i16 node:$in), (iPTR 4))>;
 def Neon_High4S  : PatFrag<(ops node:$in),
                            (extract_subvector (v4i32 node:$in), (iPTR 2))>;
+def Neon_High2D  : PatFrag<(ops node:$in),
+                           (extract_subvector (v2i64 node:$in), (iPTR 1))>;
+def Neon_High4float : PatFrag<(ops node:$in),
+                               (extract_subvector (v4f32 node:$in), (iPTR 2))>;
+def Neon_High2double : PatFrag<(ops node:$in),
+                               (extract_subvector (v2f64 node:$in), (iPTR 1))>;
 
-def Neon_low8H : PatFrag<(ops node:$in),
+def Neon_Low16B : PatFrag<(ops node:$in),
+                          (v8i8 (extract_subvector (v16i8 node:$in),
+                                                   (iPTR 0)))>;
+def Neon_Low8H : PatFrag<(ops node:$in),
                          (v4i16 (extract_subvector (v8i16 node:$in),
                                                    (iPTR 0)))>;
-def Neon_low4S : PatFrag<(ops node:$in),
+def Neon_Low4S : PatFrag<(ops node:$in),
                          (v2i32 (extract_subvector (v4i32 node:$in),
                                                    (iPTR 0)))>;
-def Neon_low4f : PatFrag<(ops node:$in),
-                         (v2f32 (extract_subvector (v4f32 node:$in),
+def Neon_Low2D : PatFrag<(ops node:$in),
+                         (v1i64 (extract_subvector (v2i64 node:$in),
                                                    (iPTR 0)))>;
+def Neon_Low4float : PatFrag<(ops node:$in),
+                             (v2f32 (extract_subvector (v4f32 node:$in),
+                                                       (iPTR 0)))>;
+def Neon_Low2double : PatFrag<(ops node:$in),
+                              (v1f64 (extract_subvector (v2f64 node:$in),
+                                                        (iPTR 0)))>;
+
+def neon_uimm3_shift : Operand<i32>,
+                         ImmLeaf<i32, [{return Imm < 8;}]> {
+  let ParserMatchClass = uimm3_asmoperand;
+}
+
+def neon_uimm4_shift : Operand<i32>,
+                         ImmLeaf<i32, [{return Imm < 16;}]> {
+  let ParserMatchClass = uimm4_asmoperand;
+}
+
+def neon_uimm5_shift : Operand<i32>,
+                         ImmLeaf<i32, [{return Imm < 32;}]> {
+  let ParserMatchClass = uimm5_asmoperand;
+}
 
 class N2VShiftLong<bit q, bit u, bits<5> opcode, string asmop, string DestT,
                    string SrcT, ValueType DestTy, ValueType SrcTy,
@@ -1619,7 +1640,7 @@ class N2VShiftLong<bit q, bit u, bits<5> opcode, string asmop, string DestT,
                      [(set (DestTy VPR128:$Rd),
                         (DestTy (shl
                           (DestTy (ExtOp (SrcTy VPR64:$Rn))),
-                            (DestTy (Neon_vdup (i32 imm:$Imm))))))],
+                            (DestTy (Neon_vdup (i32 ImmTy:$Imm))))))],
                      NoItinerary>;
 
 class N2VShiftLongHigh<bit q, bit u, bits<5> opcode, string asmop, string DestT,
@@ -1633,40 +1654,40 @@ class N2VShiftLongHigh<bit q, bit u, bits<5> opcode, string asmop, string DestT,
                         (DestTy (shl
                           (DestTy (ExtOp
                             (SrcTy (getTop VPR128:$Rn)))),
-                              (DestTy (Neon_vdup (i32 imm:$Imm))))))],
+                              (DestTy (Neon_vdup (i32 ImmTy:$Imm))))))],
                      NoItinerary>;
 
 multiclass NeonI_N2VShLL<string prefix, bit u, bits<5> opcode, string asmop,
                          SDNode ExtOp> {
   // 64-bit vector types.
   def _8B : N2VShiftLong<0b0, u, opcode, asmop, "8h", "8b", v8i16, v8i8,
-                         uimm3, ExtOp> {
+                         neon_uimm3_shift, ExtOp> {
     let Inst{22-19} = 0b0001;  // immh:immb = 0001xxx
   }
 
   def _4H : N2VShiftLong<0b0, u, opcode, asmop, "4s", "4h", v4i32, v4i16,
-                         uimm4, ExtOp> {
+                         neon_uimm4_shift, ExtOp> {
     let Inst{22-20} = 0b001;   // immh:immb = 001xxxx
   }
 
   def _2S : N2VShiftLong<0b0, u, opcode, asmop, "2d", "2s", v2i64, v2i32,
-                         uimm5, ExtOp> {
+                         neon_uimm5_shift, ExtOp> {
     let Inst{22-21} = 0b01;    // immh:immb = 01xxxxx
   }
 
   // 128-bit vector types
-  def _16B : N2VShiftLongHigh<0b1, u, opcode, asmop, "8h", "16b",
-                              v8i16, v8i8, 8, uimm3, ExtOp, Neon_High16B> {
+  def _16B : N2VShiftLongHigh<0b1, u, opcode, asmop, "8h", "16b", v8i16, v8i8,
+                              8, neon_uimm3_shift, ExtOp, Neon_High16B> {
     let Inst{22-19} = 0b0001;  // immh:immb = 0001xxx
   }
 
-  def _8H : N2VShiftLongHigh<0b1, u, opcode, asmop, "4s", "8h",
-                             v4i32, v4i16, 4, uimm4, ExtOp, Neon_High8H> {
+  def _8H : N2VShiftLongHigh<0b1, u, opcode, asmop, "4s", "8h", v4i32, v4i16,
+                             4, neon_uimm4_shift, ExtOp, Neon_High8H> {
     let Inst{22-20} = 0b001;   // immh:immb = 001xxxx
   }
 
-  def _4S : N2VShiftLongHigh<0b1, u, opcode, asmop, "2d", "4s",
-                             v2i64, v2i32, 2, uimm5, ExtOp, Neon_High4S> {
+  def _4S : N2VShiftLongHigh<0b1, u, opcode, asmop, "2d", "4s", v2i64, v2i32,
+                             2, neon_uimm5_shift, ExtOp, Neon_High4S> {
     let Inst{22-21} = 0b01;    // immh:immb = 01xxxxx
   }
 
@@ -3278,6 +3299,11 @@ multiclass NeonI_3VDL_v3<bit u, bits<4> opcode, string asmop,
   let isCommutable = Commutable in {
     def _8h8b : NeonI_3VD_2Op<0b0, u, 0b00, opcode, asmop, "8h", "8b",
                               opnode, VPR128, VPR64, v8i16, v8i8>;
+    
+    def _1q1d : NeonI_3VDiff<0b0, u, 0b11, opcode,
+                             (outs VPR128:$Rd), (ins VPR64:$Rn, VPR64:$Rm),
+                             asmop # "\t$Rd.1q, $Rn.1d, $Rm.1d",
+                             [], NoItinerary>;
   }
 }
 
@@ -3289,6 +3315,11 @@ multiclass NeonI_3VDL2_2Op_mull_v3<bit u, bits<4> opcode, string asmop,
     def _8h16b : NeonI_3VDL2_2Op_mull<0b1, u, 0b00, opcode, asmop, "8h", "16b",
                                       !cast<PatFrag>(opnode # "_16B"),
                                       v8i16, v16i8>;
+    
+    def _1q2d : NeonI_3VDiff<0b1, u, 0b11, opcode,
+                             (outs VPR128:$Rd), (ins VPR128:$Rn, VPR128:$Rm),
+                             asmop # "\t$Rd.1q, $Rn.2d, $Rm.2d",
+                             [], NoItinerary>;
   }
 }
 
@@ -3358,14 +3389,14 @@ defm LD3 : LDVList_BHSD<0b0100, "VTriple", "ld3">;
 defm LD4 : LDVList_BHSD<0b0000, "VQuad", "ld4">;
 
 // Load multiple 1-element structure to N consecutive registers (N = 2,3,4)
-defm LD1_2V : LDVList_BHSD<0b1010, "VPair", "ld1">;
-def LD1_2V_1D : NeonI_LDVList<0, 0b1010, 0b11, VPair1D_operand, "ld1">;
+defm LD1x2 : LDVList_BHSD<0b1010, "VPair", "ld1">;
+def LD1x2_1D : NeonI_LDVList<0, 0b1010, 0b11, VPair1D_operand, "ld1">;
 
-defm LD1_3V : LDVList_BHSD<0b0110, "VTriple", "ld1">;
-def LD1_3V_1D : NeonI_LDVList<0, 0b0110, 0b11, VTriple1D_operand, "ld1">;
+defm LD1x3 : LDVList_BHSD<0b0110, "VTriple", "ld1">;
+def LD1x3_1D : NeonI_LDVList<0, 0b0110, 0b11, VTriple1D_operand, "ld1">;
 
-defm LD1_4V : LDVList_BHSD<0b0010, "VQuad", "ld1">;
-def LD1_4V_1D : NeonI_LDVList<0, 0b0010, 0b11, VQuad1D_operand, "ld1">;
+defm LD1x4 : LDVList_BHSD<0b0010, "VQuad", "ld1">;
+def LD1x4_1D : NeonI_LDVList<0, 0b0010, 0b11, VQuad1D_operand, "ld1">;
 
 class NeonI_STVList<bit q, bits<4> opcode, bits<2> size,
                     RegisterOperand VecList, string asmop>
@@ -3412,19 +3443,112 @@ defm ST3 : STVList_BHSD<0b0100, "VTriple", "st3">;
 defm ST4 : STVList_BHSD<0b0000, "VQuad", "st4">;
 
 // Store multiple 1-element structures from N consecutive registers (N = 2,3,4)
-defm ST1_2V : STVList_BHSD<0b1010, "VPair", "st1">;
-def ST1_2V_1D : NeonI_STVList<0, 0b1010, 0b11, VPair1D_operand, "st1">;
+defm ST1x2 : STVList_BHSD<0b1010, "VPair", "st1">;
+def ST1x2_1D : NeonI_STVList<0, 0b1010, 0b11, VPair1D_operand, "st1">;
 
-defm ST1_3V : STVList_BHSD<0b0110, "VTriple", "st1">;
-def ST1_3V_1D : NeonI_STVList<0, 0b0110, 0b11, VTriple1D_operand, "st1">;
+defm ST1x3 : STVList_BHSD<0b0110, "VTriple", "st1">;
+def ST1x3_1D : NeonI_STVList<0, 0b0110, 0b11, VTriple1D_operand, "st1">;
 
-defm ST1_4V : STVList_BHSD<0b0010, "VQuad", "st1">;
-def ST1_4V_1D : NeonI_STVList<0, 0b0010, 0b11, VQuad1D_operand, "st1">;
+defm ST1x4 : STVList_BHSD<0b0010, "VQuad", "st1">;
+def ST1x4_1D : NeonI_STVList<0, 0b0010, 0b11, VQuad1D_operand, "st1">;
+
+def : Pat<(v2f64 (load GPR64xsp:$addr)), (LD1_2D GPR64xsp:$addr)>;
+def : Pat<(v2i64 (load GPR64xsp:$addr)), (LD1_2D GPR64xsp:$addr)>;
+
+def : Pat<(v4f32 (load GPR64xsp:$addr)), (LD1_4S GPR64xsp:$addr)>;
+def : Pat<(v4i32 (load GPR64xsp:$addr)), (LD1_4S GPR64xsp:$addr)>;
+
+def : Pat<(v8i16 (load GPR64xsp:$addr)), (LD1_8H GPR64xsp:$addr)>;
+def : Pat<(v16i8 (load GPR64xsp:$addr)), (LD1_16B GPR64xsp:$addr)>;
+
+def : Pat<(v1f64 (load GPR64xsp:$addr)), (LD1_1D GPR64xsp:$addr)>;
+def : Pat<(v1i64 (load GPR64xsp:$addr)), (LD1_1D GPR64xsp:$addr)>;
+
+def : Pat<(v2f32 (load GPR64xsp:$addr)), (LD1_2S GPR64xsp:$addr)>;
+def : Pat<(v2i32 (load GPR64xsp:$addr)), (LD1_2S GPR64xsp:$addr)>;
+
+def : Pat<(v4i16 (load GPR64xsp:$addr)), (LD1_4H GPR64xsp:$addr)>;
+def : Pat<(v8i8 (load GPR64xsp:$addr)), (LD1_8B GPR64xsp:$addr)>;
+
+def : Pat<(store (v2i64 VPR128:$value), GPR64xsp:$addr),
+          (ST1_2D GPR64xsp:$addr, VPR128:$value)>;
+def : Pat<(store (v2f64 VPR128:$value), GPR64xsp:$addr),
+          (ST1_2D GPR64xsp:$addr, VPR128:$value)>;
+
+def : Pat<(store (v4i32 VPR128:$value), GPR64xsp:$addr),
+          (ST1_4S GPR64xsp:$addr, VPR128:$value)>;
+def : Pat<(store (v4f32 VPR128:$value), GPR64xsp:$addr),
+          (ST1_4S GPR64xsp:$addr, VPR128:$value)>;
+
+def : Pat<(store (v8i16 VPR128:$value), GPR64xsp:$addr),
+          (ST1_8H GPR64xsp:$addr, VPR128:$value)>;
+def : Pat<(store (v16i8 VPR128:$value), GPR64xsp:$addr),
+          (ST1_16B GPR64xsp:$addr, VPR128:$value)>;
+
+def : Pat<(store (v1i64 VPR64:$value), GPR64xsp:$addr),
+          (ST1_1D GPR64xsp:$addr, VPR64:$value)>;
+def : Pat<(store (v1f64 VPR64:$value), GPR64xsp:$addr),
+          (ST1_1D GPR64xsp:$addr, VPR64:$value)>;
+
+def : Pat<(store (v2i32 VPR64:$value), GPR64xsp:$addr),
+          (ST1_2S GPR64xsp:$addr, VPR64:$value)>;
+def : Pat<(store (v2f32 VPR64:$value), GPR64xsp:$addr),
+          (ST1_2S GPR64xsp:$addr, VPR64:$value)>;
+
+def : Pat<(store (v4i16 VPR64:$value), GPR64xsp:$addr),
+          (ST1_4H GPR64xsp:$addr, VPR64:$value)>;
+def : Pat<(store (v8i8 VPR64:$value), GPR64xsp:$addr),
+          (ST1_8B GPR64xsp:$addr, VPR64:$value)>;
 
 // End of vector load/store multiple N-element structure(class SIMD lselem)
 
 // The followings are post-index vector load/store multiple N-element
 // structure(class SIMD lselem-post)
+def exact1_asmoperand : AsmOperandClass {
+  let Name = "Exact1";
+  let PredicateMethod = "isExactImm<1>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact1 : Operand<i32>, ImmLeaf<i32, [{return Imm == 1;}]> {
+  let ParserMatchClass = exact1_asmoperand;
+}
+
+def exact2_asmoperand : AsmOperandClass {
+  let Name = "Exact2";
+  let PredicateMethod = "isExactImm<2>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact2 : Operand<i32>, ImmLeaf<i32, [{return Imm == 2;}]> {
+  let ParserMatchClass = exact2_asmoperand;
+}
+
+def exact3_asmoperand : AsmOperandClass {
+  let Name = "Exact3";
+  let PredicateMethod = "isExactImm<3>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact3 : Operand<i32>, ImmLeaf<i32, [{return Imm == 3;}]> {
+  let ParserMatchClass = exact3_asmoperand;
+}
+
+def exact4_asmoperand : AsmOperandClass {
+  let Name = "Exact4";
+  let PredicateMethod = "isExactImm<4>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact4 : Operand<i32>, ImmLeaf<i32, [{return Imm == 4;}]> {
+  let ParserMatchClass = exact4_asmoperand;
+}
+
+def exact6_asmoperand : AsmOperandClass {
+  let Name = "Exact6";
+  let PredicateMethod = "isExactImm<6>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact6 : Operand<i32>, ImmLeaf<i32, [{return Imm == 6;}]> {
+  let ParserMatchClass = exact6_asmoperand;
+}
+
 def exact8_asmoperand : AsmOperandClass {
   let Name = "Exact8";
   let PredicateMethod = "isExactImm<8>";
@@ -3432,6 +3556,15 @@ def exact8_asmoperand : AsmOperandClass {
 }
 def uimm_exact8 : Operand<i32>, ImmLeaf<i32, [{return Imm == 8;}]> {
   let ParserMatchClass = exact8_asmoperand;
+}
+
+def exact12_asmoperand : AsmOperandClass {
+  let Name = "Exact12";
+  let PredicateMethod = "isExactImm<12>";
+  let RenderMethod = "addImmOperands";
+}
+def uimm_exact12 : Operand<i32>, ImmLeaf<i32, [{return Imm == 12;}]> {
+  let ParserMatchClass = exact12_asmoperand;
 }
 
 def exact16_asmoperand : AsmOperandClass {
@@ -3547,19 +3680,19 @@ defm LD4WB : LDWB_VList_BHSD<0b0000, "VQuad", uimm_exact32, uimm_exact64, "ld4">
 
 // Post-index load multiple 1-element structures from N consecutive registers
 // (N = 2,3,4)
-defm LD1WB2V : LDWB_VList_BHSD<0b1010, "VPair", uimm_exact16, uimm_exact32,
+defm LD1x2WB : LDWB_VList_BHSD<0b1010, "VPair", uimm_exact16, uimm_exact32,
                                "ld1">;
-defm LD1WB2V_1D : NeonI_LDWB_VList<0, 0b1010, 0b11, VPair1D_operand,
+defm LD1x2WB_1D : NeonI_LDWB_VList<0, 0b1010, 0b11, VPair1D_operand,
                                    uimm_exact16, "ld1">;
 
-defm LD1WB3V : LDWB_VList_BHSD<0b0110, "VTriple", uimm_exact24, uimm_exact48,
+defm LD1x3WB : LDWB_VList_BHSD<0b0110, "VTriple", uimm_exact24, uimm_exact48,
                                "ld1">;
-defm LD1WB3V_1D : NeonI_LDWB_VList<0, 0b0110, 0b11, VTriple1D_operand,
+defm LD1x3WB_1D : NeonI_LDWB_VList<0, 0b0110, 0b11, VTriple1D_operand,
                                    uimm_exact24, "ld1">;
 
-defm LD1WB_4V : LDWB_VList_BHSD<0b0010, "VQuad", uimm_exact32, uimm_exact64,
+defm LD1x4WB : LDWB_VList_BHSD<0b0010, "VQuad", uimm_exact32, uimm_exact64,
                                 "ld1">;
-defm LD1WB4V_1D : NeonI_LDWB_VList<0, 0b0010, 0b11, VQuad1D_operand,
+defm LD1x4WB_1D : NeonI_LDWB_VList<0, 0b0010, 0b11, VQuad1D_operand,
                                    uimm_exact32, "ld1">;
 
 multiclass NeonI_STWB_VList<bit q, bits<4> opcode, bits<2> size,
@@ -3629,24 +3762,594 @@ defm ST4WB : STWB_VList_BHSD<0b0000, "VQuad", uimm_exact32, uimm_exact64, "st4">
 
 // Post-index load multiple 1-element structures from N consecutive registers
 // (N = 2,3,4)
-defm ST1WB2V : STWB_VList_BHSD<0b1010, "VPair", uimm_exact16, uimm_exact32,
+defm ST1x2WB : STWB_VList_BHSD<0b1010, "VPair", uimm_exact16, uimm_exact32,
                                "st1">;
-defm ST1WB2V_1D : NeonI_STWB_VList<0, 0b1010, 0b11, VPair1D_operand,
+defm ST1x2WB_1D : NeonI_STWB_VList<0, 0b1010, 0b11, VPair1D_operand,
                                    uimm_exact16, "st1">;
 
-defm ST1WB3V : STWB_VList_BHSD<0b0110, "VTriple", uimm_exact24, uimm_exact48,
+defm ST1x3WB : STWB_VList_BHSD<0b0110, "VTriple", uimm_exact24, uimm_exact48,
                                "st1">;
-defm ST1WB3V_1D : NeonI_STWB_VList<0, 0b0110, 0b11, VTriple1D_operand,
+defm ST1x3WB_1D : NeonI_STWB_VList<0, 0b0110, 0b11, VTriple1D_operand,
                                    uimm_exact24, "st1">;
 
-defm ST1WB4V : STWB_VList_BHSD<0b0010, "VQuad", uimm_exact32, uimm_exact64,
+defm ST1x4WB : STWB_VList_BHSD<0b0010, "VQuad", uimm_exact32, uimm_exact64,
                                "st1">;
-defm ST1WB4V_1D : NeonI_STWB_VList<0, 0b0010, 0b11, VQuad1D_operand,
+defm ST1x4WB_1D : NeonI_STWB_VList<0, 0b0010, 0b11, VQuad1D_operand,
                                    uimm_exact32, "st1">;
 
 // End of post-index vector load/store multiple N-element structure
 // (class SIMD lselem-post)
 
+// The followings are vector load/store single N-element structure
+// (class SIMD lsone).
+def neon_uimm0_bare : Operand<i64>,
+                        ImmLeaf<i64, [{return Imm == 0;}]> {
+  let ParserMatchClass = neon_uimm0_asmoperand;
+  let PrintMethod = "printUImmBareOperand";
+}
+
+def neon_uimm1_bare : Operand<i64>,
+                        ImmLeaf<i64, [{return Imm < 2;}]> {
+  let ParserMatchClass = neon_uimm1_asmoperand;
+  let PrintMethod = "printUImmBareOperand";
+}
+
+def neon_uimm2_bare : Operand<i64>,
+                        ImmLeaf<i64, [{return Imm < 4;}]> {
+  let ParserMatchClass = neon_uimm2_asmoperand;
+  let PrintMethod = "printUImmBareOperand";
+}
+
+def neon_uimm3_bare : Operand<i64>,
+                        ImmLeaf<i64, [{return Imm < 8;}]> {
+  let ParserMatchClass = uimm3_asmoperand;
+  let PrintMethod = "printUImmBareOperand";
+}
+
+def neon_uimm4_bare : Operand<i64>,
+                        ImmLeaf<i64, [{return Imm < 16;}]> {
+  let ParserMatchClass = uimm4_asmoperand;
+  let PrintMethod = "printUImmBareOperand";
+}
+
+class NeonI_LDN_Dup<bit q, bit r, bits<3> opcode, bits<2> size,
+                    RegisterOperand VecList, string asmop>
+    : NeonI_LdOne_Dup<q, r, opcode, size,
+                      (outs VecList:$Rt), (ins GPR64xsp:$Rn),
+                      asmop # "\t$Rt, [$Rn]",
+                      [],
+                      NoItinerary> {
+  let mayLoad = 1;
+  let neverHasSideEffects = 1;
+}
+
+multiclass LDN_Dup_BHSD<bit r, bits<3> opcode, string List, string asmop> {
+  def _8B : NeonI_LDN_Dup<0, r, opcode, 0b00,
+                          !cast<RegisterOperand>(List # "8B_operand"), asmop>;
+
+  def _4H : NeonI_LDN_Dup<0, r, opcode, 0b01,
+                          !cast<RegisterOperand>(List # "4H_operand"), asmop>;
+
+  def _2S : NeonI_LDN_Dup<0, r, opcode, 0b10,
+                          !cast<RegisterOperand>(List # "2S_operand"), asmop>;
+
+  def _1D : NeonI_LDN_Dup<0, r, opcode, 0b11,
+                          !cast<RegisterOperand>(List # "1D_operand"), asmop>;
+
+  def _16B : NeonI_LDN_Dup<1, r, opcode, 0b00,
+                           !cast<RegisterOperand>(List # "16B_operand"), asmop>;
+
+  def _8H : NeonI_LDN_Dup<1, r, opcode, 0b01,
+                          !cast<RegisterOperand>(List # "8H_operand"), asmop>;
+
+  def _4S : NeonI_LDN_Dup<1, r, opcode, 0b10,
+                          !cast<RegisterOperand>(List # "4S_operand"), asmop>;
+
+  def _2D : NeonI_LDN_Dup<1, r, opcode, 0b11,
+                          !cast<RegisterOperand>(List # "2D_operand"), asmop>;
+}
+
+// Load single 1-element structure to all lanes of 1 register
+defm LD1R : LDN_Dup_BHSD<0b0, 0b110, "VOne", "ld1r">;
+
+// Load single N-element structure to all lanes of N consecutive 
+// registers (N = 2,3,4)
+defm LD2R : LDN_Dup_BHSD<0b1, 0b110, "VPair", "ld2r">;
+defm LD3R : LDN_Dup_BHSD<0b0, 0b111, "VTriple", "ld3r">;
+defm LD4R : LDN_Dup_BHSD<0b1, 0b111, "VQuad", "ld4r">;
+
+
+class LD1R_pattern <ValueType VTy, ValueType DTy, PatFrag LoadOp,
+                    Instruction INST>
+    : Pat<(VTy (Neon_vdup (DTy (LoadOp GPR64xsp:$Rn)))),
+          (VTy (INST GPR64xsp:$Rn))>;
+
+// Match all LD1R instructions
+def : LD1R_pattern<v8i8, i32, extloadi8, LD1R_8B>;
+
+def : LD1R_pattern<v16i8, i32, extloadi8, LD1R_16B>;
+
+def : LD1R_pattern<v4i16, i32, extloadi16, LD1R_4H>;
+
+def : LD1R_pattern<v8i16, i32, extloadi16, LD1R_8H>;
+
+def : LD1R_pattern<v2i32, i32, load, LD1R_2S>;
+def : LD1R_pattern<v2f32, f32, load, LD1R_2S>;
+
+def : LD1R_pattern<v4i32, i32, load, LD1R_4S>;
+def : LD1R_pattern<v4f32, f32, load, LD1R_4S>;
+
+def : LD1R_pattern<v1i64, i64, load, LD1R_1D>;
+def : LD1R_pattern<v1f64, f64, load, LD1R_1D>;
+
+def : LD1R_pattern<v2i64, i64, load, LD1R_2D>;
+def : LD1R_pattern<v2f64, f64, load, LD1R_2D>;
+
+
+multiclass VectorList_Bare_BHSD<string PREFIX, int Count,
+                                RegisterClass RegList> {
+  defm B : VectorList_operands<PREFIX, "B", Count, RegList>;
+  defm H : VectorList_operands<PREFIX, "H", Count, RegList>;
+  defm S : VectorList_operands<PREFIX, "S", Count, RegList>;
+  defm D : VectorList_operands<PREFIX, "D", Count, RegList>;
+}
+
+// Special vector list operand of 128-bit vectors with bare layout.
+// i.e. only show ".b", ".h", ".s", ".d"
+defm VOne : VectorList_Bare_BHSD<"VOne", 1, FPR128>;
+defm VPair : VectorList_Bare_BHSD<"VPair", 2, QPair>;
+defm VTriple : VectorList_Bare_BHSD<"VTriple", 3, QTriple>;
+defm VQuad : VectorList_Bare_BHSD<"VQuad", 4, QQuad>;
+
+class NeonI_LDN_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                     Operand ImmOp, string asmop>
+    : NeonI_LdStOne_Lane<1, r, op2_1, op0,
+                         (outs VList:$Rt),
+                         (ins GPR64xsp:$Rn, VList:$src, ImmOp:$lane),
+                         asmop # "\t$Rt[$lane], [$Rn]",
+                         [],
+                         NoItinerary> {
+  let mayLoad = 1;
+  let neverHasSideEffects = 1;
+  let hasExtraDefRegAllocReq = 1;
+  let Constraints = "$src = $Rt";
+}
+
+multiclass LDN_Lane_BHSD<bit r, bit op0, string List, string asmop> {
+  def _B : NeonI_LDN_Lane<r, 0b00, op0,
+                          !cast<RegisterOperand>(List # "B_operand"),
+                          neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+
+  def _H : NeonI_LDN_Lane<r, 0b01, op0,
+                          !cast<RegisterOperand>(List # "H_operand"),
+                          neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+
+  def _S : NeonI_LDN_Lane<r, 0b10, op0,
+                          !cast<RegisterOperand>(List # "S_operand"),
+                          neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+  
+  def _D : NeonI_LDN_Lane<r, 0b10, op0,
+                          !cast<RegisterOperand>(List # "D_operand"),
+                          neon_uimm1_bare, asmop> {
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+}
+
+// Load single 1-element structure to one lane of 1 register.
+defm LD1LN : LDN_Lane_BHSD<0b0, 0b0, "VOne", "ld1">;
+
+// Load single N-element structure to one lane of N consecutive registers
+// (N = 2,3,4)
+defm LD2LN : LDN_Lane_BHSD<0b1, 0b0, "VPair", "ld2">;
+defm LD3LN : LDN_Lane_BHSD<0b0, 0b1, "VTriple", "ld3">;
+defm LD4LN : LDN_Lane_BHSD<0b1, 0b1, "VQuad", "ld4">;
+
+multiclass LD1LN_patterns<ValueType VTy, ValueType VTy2, ValueType DTy,
+                          Operand ImmOp, Operand ImmOp2, PatFrag LoadOp,
+                          Instruction INST> {
+  def : Pat<(VTy (vector_insert (VTy VPR64:$src),
+                     (DTy (LoadOp GPR64xsp:$Rn)), (ImmOp:$lane))),
+            (VTy (EXTRACT_SUBREG 
+                     (INST GPR64xsp:$Rn, 
+                           (SUBREG_TO_REG (i64 0), VPR64:$src, sub_64),
+                           ImmOp:$lane),
+                     sub_64))>;
+
+  def : Pat<(VTy2 (vector_insert (VTy2 VPR128:$src),
+                      (DTy (LoadOp GPR64xsp:$Rn)), (ImmOp2:$lane))),
+            (VTy2 (INST GPR64xsp:$Rn, VPR128:$src, ImmOp2:$lane))>;
+}
+
+// Match all LD1LN instructions
+defm : LD1LN_patterns<v8i8, v16i8, i32, neon_uimm3_bare, neon_uimm4_bare,
+                      extloadi8, LD1LN_B>;
+
+defm : LD1LN_patterns<v4i16, v8i16, i32, neon_uimm2_bare, neon_uimm3_bare,
+                      extloadi16, LD1LN_H>;
+
+defm : LD1LN_patterns<v2i32, v4i32, i32, neon_uimm1_bare, neon_uimm2_bare,
+                      load, LD1LN_S>;
+defm : LD1LN_patterns<v2f32, v4f32, f32, neon_uimm1_bare, neon_uimm2_bare,
+                      load, LD1LN_S>;
+
+defm : LD1LN_patterns<v1i64, v2i64, i64, neon_uimm0_bare, neon_uimm1_bare,
+                      load, LD1LN_D>;
+defm : LD1LN_patterns<v1f64, v2f64, f64, neon_uimm0_bare, neon_uimm1_bare,
+                      load, LD1LN_D>;
+
+class NeonI_STN_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                     Operand ImmOp, string asmop>
+    : NeonI_LdStOne_Lane<0, r, op2_1, op0,
+                         (outs), (ins GPR64xsp:$Rn, VList:$Rt, ImmOp:$lane),
+                         asmop # "\t$Rt[$lane], [$Rn]",
+                         [],
+                         NoItinerary> {
+  let mayStore = 1;
+  let neverHasSideEffects = 1;
+  let hasExtraDefRegAllocReq = 1;
+}
+
+multiclass STN_Lane_BHSD<bit r, bit op0, string List, string asmop> {
+  def _B : NeonI_STN_Lane<r, 0b00, op0,
+                          !cast<RegisterOperand>(List # "B_operand"),
+                          neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+
+  def _H : NeonI_STN_Lane<r, 0b01, op0,
+                          !cast<RegisterOperand>(List # "H_operand"),
+                          neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+
+  def _S : NeonI_STN_Lane<r, 0b10, op0,
+                          !cast<RegisterOperand>(List # "S_operand"),
+                           neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+  
+  def _D : NeonI_STN_Lane<r, 0b10, op0,
+                          !cast<RegisterOperand>(List # "D_operand"),
+                          neon_uimm1_bare, asmop>{
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+}
+
+// Store single 1-element structure from one lane of 1 register.
+defm ST1LN : STN_Lane_BHSD<0b0, 0b0, "VOne", "st1">;
+
+// Store single N-element structure from one lane of N consecutive registers
+// (N = 2,3,4)
+defm ST2LN : STN_Lane_BHSD<0b1, 0b0, "VPair", "st2">;
+defm ST3LN : STN_Lane_BHSD<0b0, 0b1, "VTriple", "st3">;
+defm ST4LN : STN_Lane_BHSD<0b1, 0b1, "VQuad", "st4">;
+
+multiclass ST1LN_patterns<ValueType VTy, ValueType VTy2, ValueType DTy,
+                          Operand ImmOp, Operand ImmOp2, PatFrag StoreOp,
+                          Instruction INST> {
+  def : Pat<(StoreOp (DTy (vector_extract (VTy VPR64:$Rt), ImmOp:$lane)),
+                     GPR64xsp:$Rn),
+            (INST GPR64xsp:$Rn,
+                  (SUBREG_TO_REG (i64 0), VPR64:$Rt, sub_64),
+                  ImmOp:$lane)>;
+
+  def : Pat<(StoreOp (DTy (vector_extract (VTy2 VPR128:$Rt), ImmOp2:$lane)),
+                     GPR64xsp:$Rn),
+            (INST GPR64xsp:$Rn, VPR128:$Rt, ImmOp2:$lane)>;
+}
+
+// Match all ST1LN instructions
+defm : ST1LN_patterns<v8i8, v16i8, i32, neon_uimm3_bare, neon_uimm4_bare,
+                      truncstorei8, ST1LN_B>;
+
+defm : ST1LN_patterns<v4i16, v8i16, i32, neon_uimm2_bare, neon_uimm3_bare,
+                      truncstorei16, ST1LN_H>;
+
+defm : ST1LN_patterns<v2i32, v4i32, i32, neon_uimm1_bare, neon_uimm2_bare,
+                      store, ST1LN_S>;
+defm : ST1LN_patterns<v2f32, v4f32, f32, neon_uimm1_bare, neon_uimm2_bare,
+                      store, ST1LN_S>;
+
+defm : ST1LN_patterns<v1i64, v2i64, i64, neon_uimm0_bare, neon_uimm1_bare,
+                      store, ST1LN_D>;
+defm : ST1LN_patterns<v1f64, v2f64, f64, neon_uimm0_bare, neon_uimm1_bare,
+                      store, ST1LN_D>;
+
+// End of vector load/store single N-element structure (class SIMD lsone).
+
+
+// The following are post-index load/store single N-element instructions
+// (class SIMD lsone-post)
+
+multiclass NeonI_LDN_WB_Dup<bit q, bit r, bits<3> opcode, bits<2> size,
+                            RegisterOperand VecList, Operand ImmTy,
+                            string asmop> {
+  let mayLoad = 1, neverHasSideEffects = 1, Constraints = "$wb = $Rn",
+  DecoderMethod = "DecodeVLDSTLanePostInstruction" in {
+    def _fixed : NeonI_LdOne_Dup_Post<q, r, opcode, size,
+                      (outs VecList:$Rt, GPR64xsp:$wb),
+                      (ins GPR64xsp:$Rn, ImmTy:$amt),
+                      asmop # "\t$Rt, [$Rn], $amt",
+                      [],
+                      NoItinerary> {
+                        let Rm = 0b11111;
+                      }
+
+    def _register : NeonI_LdOne_Dup_Post<q, r, opcode, size,
+                      (outs VecList:$Rt, GPR64xsp:$wb),
+                      (ins GPR64xsp:$Rn, GPR64noxzr:$Rm),
+                      asmop # "\t$Rt, [$Rn], $Rm",
+                      [],
+                      NoItinerary>;
+  }
+}
+
+multiclass LDWB_Dup_BHSD<bit r, bits<3> opcode, string List, string asmop,
+                         Operand uimm_b, Operand uimm_h,
+                         Operand uimm_s, Operand uimm_d> {
+  defm _8B : NeonI_LDN_WB_Dup<0, r, opcode, 0b00,
+                              !cast<RegisterOperand>(List # "8B_operand"),
+                              uimm_b, asmop>;
+
+  defm _4H : NeonI_LDN_WB_Dup<0, r, opcode, 0b01,
+                              !cast<RegisterOperand>(List # "4H_operand"),
+                              uimm_h, asmop>;
+
+  defm _2S : NeonI_LDN_WB_Dup<0, r, opcode, 0b10,
+                              !cast<RegisterOperand>(List # "2S_operand"),
+                              uimm_s, asmop>;
+
+  defm _1D : NeonI_LDN_WB_Dup<0, r, opcode, 0b11,
+                              !cast<RegisterOperand>(List # "1D_operand"),
+                              uimm_d, asmop>;
+
+  defm _16B : NeonI_LDN_WB_Dup<1, r, opcode, 0b00,
+                               !cast<RegisterOperand>(List # "16B_operand"),
+                               uimm_b, asmop>;
+
+  defm _8H : NeonI_LDN_WB_Dup<1, r, opcode, 0b01,
+                              !cast<RegisterOperand>(List # "8H_operand"),
+                              uimm_h, asmop>;
+
+  defm _4S : NeonI_LDN_WB_Dup<1, r, opcode, 0b10,
+                              !cast<RegisterOperand>(List # "4S_operand"),
+                              uimm_s, asmop>;
+
+  defm _2D : NeonI_LDN_WB_Dup<1, r, opcode, 0b11,
+                              !cast<RegisterOperand>(List # "2D_operand"),
+                              uimm_d, asmop>;
+}
+
+// Post-index load single 1-element structure to all lanes of 1 register
+defm LD1R_WB : LDWB_Dup_BHSD<0b0, 0b110, "VOne", "ld1r", uimm_exact1,
+                             uimm_exact2, uimm_exact4, uimm_exact8>;
+
+// Post-index load single N-element structure to all lanes of N consecutive 
+// registers (N = 2,3,4)
+defm LD2R_WB : LDWB_Dup_BHSD<0b1, 0b110, "VPair", "ld2r", uimm_exact2,
+                             uimm_exact4, uimm_exact8, uimm_exact16>;
+defm LD3R_WB : LDWB_Dup_BHSD<0b0, 0b111, "VTriple", "ld3r", uimm_exact3,
+                             uimm_exact6, uimm_exact12, uimm_exact24>;
+defm LD4R_WB : LDWB_Dup_BHSD<0b1, 0b111, "VQuad", "ld4r", uimm_exact4,
+                             uimm_exact8, uimm_exact16, uimm_exact32>;
+
+let mayLoad = 1, neverHasSideEffects = 1, hasExtraDefRegAllocReq = 1, 
+    Constraints = "$Rn = $wb, $Rt = $src",
+    DecoderMethod = "DecodeVLDSTLanePostInstruction" in {
+  class LDN_WBFx_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                                Operand ImmTy, Operand ImmOp, string asmop>
+      : NeonI_LdStOne_Lane_Post<1, r, op2_1, op0,
+                                (outs VList:$Rt, GPR64xsp:$wb),
+                                (ins GPR64xsp:$Rn, ImmTy:$amt,
+                                    VList:$src, ImmOp:$lane),
+                                asmop # "\t$Rt[$lane], [$Rn], $amt",
+                                [],
+                                NoItinerary> {
+    let Rm = 0b11111;
+  }
+
+  class LDN_WBReg_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                                 Operand ImmTy, Operand ImmOp, string asmop>
+      : NeonI_LdStOne_Lane_Post<1, r, op2_1, op0,
+                                (outs VList:$Rt, GPR64xsp:$wb),
+                                (ins GPR64xsp:$Rn, GPR64noxzr:$Rm,
+                                    VList:$src, ImmOp:$lane),
+                                asmop # "\t$Rt[$lane], [$Rn], $Rm",
+                                [],
+                                NoItinerary>;
+}
+
+multiclass LD_Lane_WB_BHSD<bit r, bit op0, string List, string asmop,
+                           Operand uimm_b, Operand uimm_h,
+                           Operand uimm_s, Operand uimm_d> {
+  def _B_fixed : LDN_WBFx_Lane<r, 0b00, op0,
+                               !cast<RegisterOperand>(List # "B_operand"),
+                               uimm_b, neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+
+  def _B_register : LDN_WBReg_Lane<r, 0b00, op0,
+                                   !cast<RegisterOperand>(List # "B_operand"),
+                                   uimm_b, neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+  
+  def _H_fixed : LDN_WBFx_Lane<r, 0b01, op0,
+                               !cast<RegisterOperand>(List # "H_operand"),
+                               uimm_h, neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+  
+  def _H_register : LDN_WBReg_Lane<r, 0b01, op0,
+                                   !cast<RegisterOperand>(List # "H_operand"),
+                                   uimm_h, neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+
+  def _S_fixed : LDN_WBFx_Lane<r, 0b10, op0,
+                               !cast<RegisterOperand>(List # "S_operand"),
+                               uimm_s, neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+
+  def _S_register : LDN_WBReg_Lane<r, 0b10, op0,
+                                   !cast<RegisterOperand>(List # "S_operand"),
+                                   uimm_s, neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+  
+  def _D_fixed : LDN_WBFx_Lane<r, 0b10, op0,
+                               !cast<RegisterOperand>(List # "D_operand"),
+                               uimm_d, neon_uimm1_bare, asmop> {
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+
+  def _D_register : LDN_WBReg_Lane<r, 0b10, op0,
+                                   !cast<RegisterOperand>(List # "D_operand"),
+                                   uimm_d, neon_uimm1_bare, asmop> {
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+}
+
+// Post-index load single 1-element structure to one lane of 1 register.
+defm LD1LN_WB : LD_Lane_WB_BHSD<0b0, 0b0, "VOne", "ld1", uimm_exact1,
+                                uimm_exact2, uimm_exact4, uimm_exact8>;
+
+// Post-index load single N-element structure to one lane of N consecutive
+// registers
+// (N = 2,3,4)
+defm LD2LN_WB : LD_Lane_WB_BHSD<0b1, 0b0, "VPair", "ld2", uimm_exact2,
+                                uimm_exact4, uimm_exact8, uimm_exact16>;
+defm LD3LN_WB : LD_Lane_WB_BHSD<0b0, 0b1, "VTriple", "ld3", uimm_exact3,
+                                uimm_exact6, uimm_exact12, uimm_exact24>;
+defm LD4LN_WB : LD_Lane_WB_BHSD<0b1, 0b1, "VQuad", "ld4", uimm_exact4,
+                                uimm_exact8, uimm_exact16, uimm_exact32>;
+
+let mayStore = 1, neverHasSideEffects = 1,
+    hasExtraDefRegAllocReq = 1, Constraints = "$Rn = $wb",
+    DecoderMethod = "DecodeVLDSTLanePostInstruction" in {
+  class STN_WBFx_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                      Operand ImmTy, Operand ImmOp, string asmop>
+      : NeonI_LdStOne_Lane_Post<0, r, op2_1, op0,
+                                (outs GPR64xsp:$wb),
+                                (ins GPR64xsp:$Rn, ImmTy:$amt,
+                                    VList:$Rt, ImmOp:$lane),
+                                asmop # "\t$Rt[$lane], [$Rn], $amt",
+                                [],
+                                NoItinerary> {
+    let Rm = 0b11111;
+  }
+
+  class STN_WBReg_Lane<bit r, bits<2> op2_1, bit op0, RegisterOperand VList,
+                       Operand ImmTy, Operand ImmOp, string asmop>
+      : NeonI_LdStOne_Lane_Post<0, r, op2_1, op0,
+                                (outs GPR64xsp:$wb),
+                                (ins GPR64xsp:$Rn, GPR64noxzr:$Rm, VList:$Rt,
+                                    ImmOp:$lane),
+                                asmop # "\t$Rt[$lane], [$Rn], $Rm",
+                                [],
+                                NoItinerary>;
+}
+
+multiclass ST_Lane_WB_BHSD<bit r, bit op0, string List, string asmop,
+                           Operand uimm_b, Operand uimm_h,
+                           Operand uimm_s, Operand uimm_d> {
+  def _B_fixed : STN_WBFx_Lane<r, 0b00, op0,
+                               !cast<RegisterOperand>(List # "B_operand"),
+                               uimm_b, neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+
+  def _B_register : STN_WBReg_Lane<r, 0b00, op0,
+                                   !cast<RegisterOperand>(List # "B_operand"),
+                                   uimm_b, neon_uimm4_bare, asmop> {
+    let Inst{12-10} = lane{2-0};
+    let Inst{30} = lane{3};
+  }
+  
+  def _H_fixed : STN_WBFx_Lane<r, 0b01, op0,
+                               !cast<RegisterOperand>(List # "H_operand"),
+                               uimm_h, neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+  
+  def _H_register : STN_WBReg_Lane<r, 0b01, op0,
+                                   !cast<RegisterOperand>(List # "H_operand"),
+                                   uimm_h, neon_uimm3_bare, asmop> {
+    let Inst{12-10} = {lane{1}, lane{0}, 0b0};
+    let Inst{30} = lane{2};
+  }
+
+  def _S_fixed : STN_WBFx_Lane<r, 0b10, op0,
+                               !cast<RegisterOperand>(List # "S_operand"),
+                               uimm_s, neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+
+  def _S_register : STN_WBReg_Lane<r, 0b10, op0,
+                                   !cast<RegisterOperand>(List # "S_operand"),
+                                   uimm_s, neon_uimm2_bare, asmop> {
+    let Inst{12-10} = {lane{0}, 0b0, 0b0};
+    let Inst{30} = lane{1};
+  }
+  
+  def _D_fixed : STN_WBFx_Lane<r, 0b10, op0,
+                               !cast<RegisterOperand>(List # "D_operand"),
+                               uimm_d, neon_uimm1_bare, asmop> {
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+
+  def _D_register : STN_WBReg_Lane<r, 0b10, op0,
+                                   !cast<RegisterOperand>(List # "D_operand"),
+                                   uimm_d, neon_uimm1_bare, asmop> {
+    let Inst{12-10} = 0b001;
+    let Inst{30} = lane{0};
+  }
+}
+
+// Post-index store single 1-element structure from one lane of 1 register.
+defm ST1LN_WB : ST_Lane_WB_BHSD<0b0, 0b0, "VOne", "st1", uimm_exact1,
+                                uimm_exact2, uimm_exact4, uimm_exact8>;
+
+// Post-index store single N-element structure from one lane of N consecutive
+// registers (N = 2,3,4)
+defm ST2LN_WB : ST_Lane_WB_BHSD<0b1, 0b0, "VPair", "st2", uimm_exact2,
+                                uimm_exact4, uimm_exact8, uimm_exact16>;
+defm ST3LN_WB : ST_Lane_WB_BHSD<0b0, 0b1, "VTriple", "st3", uimm_exact3,
+                                uimm_exact6, uimm_exact12, uimm_exact24>;
+defm ST4LN_WB : ST_Lane_WB_BHSD<0b1, 0b1, "VQuad", "st4", uimm_exact4,
+                                uimm_exact8, uimm_exact16, uimm_exact32>;
+
+// End of post-index load/store single N-element instructions
+// (class SIMD lsone-post)
+
+// Neon Scalar instructions implementation
 // Scalar Three Same
 
 class NeonI_Scalar3Same_size<bit u, bits<2> size, bits<5> opcode, string asmop,
@@ -3847,9 +4550,9 @@ multiclass Neon_Scalar2SameMisc_cvt_SD_size_patterns<SDPatternOperator Sopnode,
                                                      SDPatternOperator Dopnode,
                                                      Instruction INSTS,
                                                      Instruction INSTD> {
-  def : Pat<(v1f32 (Sopnode (v1i32 FPR32:$Rn))),
+  def : Pat<(f32 (Sopnode (v1i32 FPR32:$Rn))),
             (INSTS FPR32:$Rn)>;
-  def : Pat<(v1f64 (Dopnode (v1i64 FPR64:$Rn))),
+  def : Pat<(f64 (Dopnode (v1i64 FPR64:$Rn))),
             (INSTD FPR64:$Rn)>;
 }
 
@@ -3886,7 +4589,7 @@ multiclass NeonI_Scalar2SameMisc_cmpz_SD_size<bit u, bits<5> opcode,
 class Neon_Scalar2SameMisc_cmpz_D_size_patterns<SDPatternOperator opnode,
                                                 Instruction INSTD>
   : Pat<(v1i64 (opnode (v1i64 FPR64:$Rn),
-                       (v1i64 (bitconvert (v8i8 Neon_immAllZeros))))),
+                       (v1i64 (bitconvert (v8i8 Neon_AllZero))))),
         (INSTD FPR64:$Rn, 0)>;
 
 multiclass Neon_Scalar2SameMisc_cmpz_SD_size_patterns<SDPatternOperator opnode,
@@ -3896,7 +4599,7 @@ multiclass Neon_Scalar2SameMisc_cmpz_SD_size_patterns<SDPatternOperator opnode,
                            (v1f32 (scalar_to_vector (f32 fpimm:$FPImm))))),
             (INSTS FPR32:$Rn, fpimm:$FPImm)>;
   def : Pat<(v1i64 (opnode (v1f64 FPR64:$Rn),
-                           (v1f64 (bitconvert (v8i8 Neon_immAllZeros))))),
+                           (v1f64 (bitconvert (v8i8 Neon_AllZero))))),
             (INSTD FPR64:$Rn, 0)>;
 }
 
@@ -4088,6 +4791,11 @@ multiclass Neon_ScalarShiftImm_D_size_patterns<SDPatternOperator opnode,
                 (INSTD FPR64:$Rn, imm:$Imm)>;
 }
 
+class Neon_ScalarShiftImm_arm_D_size_patterns<SDPatternOperator opnode,
+                                              Instruction INSTD>
+  : Pat<(v1i64 (opnode (v1i64 FPR64:$Rn), (v1i64 (Neon_vdup (i32 imm:$Imm))))),
+        (INSTD FPR64:$Rn, imm:$Imm)>;
+
 multiclass Neon_ScalarShiftImm_BHSD_size_patterns<SDPatternOperator opnode,
                                                   Instruction INSTB,
                                                   Instruction INSTH,
@@ -4124,9 +4832,9 @@ multiclass Neon_ScalarShiftImm_scvtf_SD_size_patterns<SDPatternOperator Sopnode,
                                                       SDPatternOperator Dopnode,
                                                       Instruction INSTS,
                                                       Instruction INSTD> {
-  def ssi : Pat<(v1f32 (Sopnode (v1i32 FPR32:$Rn), (i32 imm:$Imm))),
+  def ssi : Pat<(f32 (Sopnode (v1i32 FPR32:$Rn), (i32 imm:$Imm))),
                 (INSTS FPR32:$Rn, imm:$Imm)>;
-  def ddi : Pat<(v1f64 (Dopnode (v1i64 FPR64:$Rn), (i32 imm:$Imm))),
+  def ddi : Pat<(f64 (Dopnode (v1i64 FPR64:$Rn), (i32 imm:$Imm))),
                 (INSTD FPR64:$Rn, imm:$Imm)>;
 }
 
@@ -4143,18 +4851,22 @@ multiclass Neon_ScalarShiftImm_fcvts_SD_size_patterns<SDPatternOperator Sopnode,
 // Scalar Signed Shift Right (Immediate)
 defm SSHR : NeonI_ScalarShiftRightImm_D_size<0b0, 0b00000, "sshr">;
 defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vshrds_n, SSHRddi>;
+// Pattern to match llvm.arm.* intrinsic.
+def : Neon_ScalarShiftImm_arm_D_size_patterns<sra, SSHRddi>;
 
 // Scalar Unsigned Shift Right (Immediate)
 defm USHR : NeonI_ScalarShiftRightImm_D_size<0b1, 0b00000, "ushr">;
 defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vshrdu_n, USHRddi>;
+// Pattern to match llvm.arm.* intrinsic.
+def : Neon_ScalarShiftImm_arm_D_size_patterns<srl, USHRddi>;
 
 // Scalar Signed Rounding Shift Right (Immediate)
 defm SRSHR : NeonI_ScalarShiftRightImm_D_size<0b0, 0b00100, "srshr">;
-defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vrshrds_n, SRSHRddi>;
+defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vsrshr, SRSHRddi>;
 
 // Scalar Unigned Rounding Shift Right (Immediate)
 defm URSHR : NeonI_ScalarShiftRightImm_D_size<0b1, 0b00100, "urshr">;
-defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vrshrdu_n, URSHRddi>;
+defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vurshr, URSHRddi>;
 
 // Scalar Signed Shift Right and Accumulate (Immediate)
 def SSRA : NeonI_ScalarShiftRightImm_accum_D_size<0b0, 0b00010, "ssra">;
@@ -4175,32 +4887,38 @@ def : Neon_ScalarShiftImm_accum_D_size_patterns<int_aarch64_neon_vrsradu_n, URSR
 // Scalar Shift Left (Immediate)
 defm SHL : NeonI_ScalarShiftLeftImm_D_size<0b0, 0b01010, "shl">;
 defm : Neon_ScalarShiftImm_D_size_patterns<int_aarch64_neon_vshld_n, SHLddi>;
+// Pattern to match llvm.arm.* intrinsic.
+def : Neon_ScalarShiftImm_arm_D_size_patterns<shl, SHLddi>;
 
 // Signed Saturating Shift Left (Immediate)
 defm SQSHL : NeonI_ScalarShiftLeftImm_BHSD_size<0b0, 0b01110, "sqshl">;
 defm : Neon_ScalarShiftImm_BHSD_size_patterns<int_aarch64_neon_vqshls_n,
                                               SQSHLbbi, SQSHLhhi,
                                               SQSHLssi, SQSHLddi>;
+// Pattern to match llvm.arm.* intrinsic.
+defm : Neon_ScalarShiftImm_D_size_patterns<Neon_sqrshlImm, SQSHLddi>;
 
 // Unsigned Saturating Shift Left (Immediate)
 defm UQSHL : NeonI_ScalarShiftLeftImm_BHSD_size<0b1, 0b01110, "uqshl">;
 defm : Neon_ScalarShiftImm_BHSD_size_patterns<int_aarch64_neon_vqshlu_n,
                                               UQSHLbbi, UQSHLhhi,
                                               UQSHLssi, UQSHLddi>;
+// Pattern to match llvm.arm.* intrinsic.
+defm : Neon_ScalarShiftImm_D_size_patterns<Neon_uqrshlImm, UQSHLddi>;
 
 // Signed Saturating Shift Left Unsigned (Immediate)
 defm SQSHLU : NeonI_ScalarShiftLeftImm_BHSD_size<0b1, 0b01100, "sqshlu">;
-defm : Neon_ScalarShiftImm_BHSD_size_patterns<int_aarch64_neon_vqshlus_n,
+defm : Neon_ScalarShiftImm_BHSD_size_patterns<int_aarch64_neon_vsqshlu,
                                               SQSHLUbbi, SQSHLUhhi,
                                               SQSHLUssi, SQSHLUddi>;
 
 // Shift Right And Insert (Immediate)
 def SRI : NeonI_ScalarShiftRightImm_accum_D_size<0b1, 0b01000, "sri">;
-def : Neon_ScalarShiftImm_accum_D_size_patterns<int_aarch64_neon_vsrid_n, SRI>;
+def : Neon_ScalarShiftImm_accum_D_size_patterns<int_aarch64_neon_vsri, SRI>;
 
 // Shift Left And Insert (Immediate)
 def SLI : NeonI_ScalarShiftLeftImm_accum_D_size<0b1, 0b01010, "sli">;
-def : Neon_ScalarShiftImm_accum_D_size_patterns<int_aarch64_neon_vslid_n, SLI>;
+def : Neon_ScalarShiftImm_accum_D_size_patterns<int_aarch64_neon_vsli, SLI>;
 
 // Signed Saturating Shift Right Narrow (Immediate)
 defm SQSHRN : NeonI_ScalarShiftImm_narrow_HSD_size<0b0, 0b10010, "sqshrn">;
@@ -4288,22 +5006,16 @@ defm UQADD : NeonI_Scalar3Same_BHSD_sizes<0b1, 0b00001, "uqadd", 1>;
 defm SQSUB : NeonI_Scalar3Same_BHSD_sizes<0b0, 0b00101, "sqsub", 0>;
 defm UQSUB : NeonI_Scalar3Same_BHSD_sizes<0b1, 0b00101, "uqsub", 0>;
 
-// Patterns to match llvm.arm.* intrinsic for
-// Scalar Integer Saturating Add, Sub  (Signed, Unsigned)
-defm : Neon_Scalar3Same_D_size_patterns<int_arm_neon_vqadds, SQADDddd>;
-defm : Neon_Scalar3Same_D_size_patterns<int_arm_neon_vqaddu, UQADDddd>;
-defm : Neon_Scalar3Same_D_size_patterns<int_arm_neon_vqsubs, SQSUBddd>;
-defm : Neon_Scalar3Same_D_size_patterns<int_arm_neon_vqsubu, UQSUBddd>;
 
 // Patterns to match llvm.aarch64.* intrinsic for
 // Scalar Integer Saturating Add, Sub  (Signed, Unsigned)
-defm : Neon_Scalar3Same_BHSD_size_patterns<int_aarch64_neon_vqadds, SQADDbbb,
+defm : Neon_Scalar3Same_BHSD_size_patterns<int_arm_neon_vqadds, SQADDbbb,
                                            SQADDhhh, SQADDsss, SQADDddd>;
-defm : Neon_Scalar3Same_BHSD_size_patterns<int_aarch64_neon_vqaddu, UQADDbbb,
+defm : Neon_Scalar3Same_BHSD_size_patterns<int_arm_neon_vqaddu, UQADDbbb,
                                            UQADDhhh, UQADDsss, UQADDddd>;
-defm : Neon_Scalar3Same_BHSD_size_patterns<int_aarch64_neon_vqsubs, SQSUBbbb,
+defm : Neon_Scalar3Same_BHSD_size_patterns<int_arm_neon_vqsubs, SQSUBbbb,
                                            SQSUBhhh, SQSUBsss, SQSUBddd>;
-defm : Neon_Scalar3Same_BHSD_size_patterns<int_aarch64_neon_vqsubu, UQSUBbbb,
+defm : Neon_Scalar3Same_BHSD_size_patterns<int_arm_neon_vqsubu, UQSUBbbb,
                                            UQSUBhhh, UQSUBsss, UQSUBddd>;
 
 // Scalar Integer Saturating Doubling Multiply Half High
@@ -4339,8 +5051,17 @@ defm : Neon_Scalar3Same_SD_size_patterns<int_arm_neon_vrsqrts, FRSQRTSsss,
 
 // Patterns to match llvm.aarch64.* intrinsic for
 // Scalar Floating-point Multiply Extended,
-defm : Neon_Scalar3Same_SD_size_patterns<int_aarch64_neon_vmulx, FMULXsss,
-                                         FMULXddd>;
+multiclass Neon_Scalar3Same_MULX_SD_size_patterns<SDPatternOperator opnode,
+                                                  Instruction INSTS,
+                                                  Instruction INSTD> {
+  def : Pat<(f32 (opnode (f32 FPR32:$Rn), (f32 FPR32:$Rm))),
+            (INSTS FPR32:$Rn, FPR32:$Rm)>;
+  def : Pat<(f64 (opnode (f64 FPR64:$Rn), (f64 FPR64:$Rm))),
+            (INSTD FPR64:$Rn, FPR64:$Rm)>;
+}
+
+defm : Neon_Scalar3Same_MULX_SD_size_patterns<int_aarch64_neon_vmulx,
+                                              FMULXsss,FMULXddd>;
 
 // Scalar Integer Shift Left (Signed, Unsigned)
 def SSHLddd : NeonI_Scalar3Same_D_size<0b0, 0b01000, "sshl">;
@@ -4414,7 +5135,7 @@ defm : Neon_Scalar3Diff_ml_HS_size_patterns<int_aarch64_neon_vqdmlsl,
 
 // Signed Saturating Doubling Multiply Long
 defm SQDMULL : NeonI_Scalar3Diff_HS_size<0b0, 0b1101, "sqdmull">;
-defm : Neon_Scalar3Diff_HS_size_patterns<int_aarch64_neon_vqdmull,
+defm : Neon_Scalar3Diff_HS_size_patterns<int_arm_neon_vqdmull,
                                          SQDMULLshh, SQDMULLdss>;
 
 // Scalar Signed Integer Convert To Floating-point
@@ -4450,6 +5171,14 @@ defm : Neon_Scalar2SameMisc_SD_size_patterns<int_arm_neon_vrsqrte,
 def CMEQddd: NeonI_Scalar3Same_D_size<0b1, 0b10001, "cmeq">;
 def : Neon_Scalar3Same_cmp_D_size_patterns<int_aarch64_neon_vceq, CMEQddd>;
 
+class Neon_Scalar3Same_cmp_D_size_v1_patterns<SDPatternOperator opnode,
+                                              Instruction INSTD,
+                                              CondCode CC>
+  : Pat<(v1i64 (opnode (v1i64 FPR64:$Rn), (v1i64 FPR64:$Rm), CC)),
+        (INSTD FPR64:$Rn, FPR64:$Rm)>;
+
+def : Neon_Scalar3Same_cmp_D_size_v1_patterns<Neon_cmp, CMEQddd, SETEQ>;
+
 // Scalar Compare Signed Greather Than Or Equal
 def CMGEddd: NeonI_Scalar3Same_D_size<0b0, 0b00111, "cmge">;
 def : Neon_Scalar3Same_cmp_D_size_patterns<int_aarch64_neon_vcge, CMGEddd>;
@@ -4469,6 +5198,7 @@ def : Neon_Scalar3Same_cmp_D_size_patterns<int_aarch64_neon_vcgt, CMGTddd>;
 // Scalar Compare Bitwise Test Bits
 def CMTSTddd: NeonI_Scalar3Same_D_size<0b0, 0b10001, "cmtst">;
 def : Neon_Scalar3Same_cmp_D_size_patterns<int_aarch64_neon_vtstd, CMTSTddd>;
+def : Neon_Scalar3Same_cmp_D_size_patterns<Neon_tst, CMTSTddd>;
 
 // Scalar Compare Bitwise Equal To Zero
 def CMEQddi: NeonI_Scalar2SameMisc_cmpz_D_size<0b0, 0b01001, "cmeq">;
@@ -4672,6 +5402,577 @@ defm : Neon_ScalarPair_SD_size_patterns<int_aarch64_neon_vpfminnm,
   int_aarch64_neon_vpfminnmq, FMINNMPvv_S_2S, FMINNMPvv_D_2D>;
 
 
+// Scalar by element Arithmetic
+
+class NeonI_ScalarXIndexedElemArith<string asmop, bits<4> opcode,
+                                    string rmlane, bit u, bit szhi, bit szlo,
+                                    RegisterClass ResFPR, RegisterClass OpFPR,
+                                    RegisterOperand OpVPR, Operand OpImm>
+  : NeonI_ScalarXIndexedElem<u, szhi, szlo, opcode,
+                             (outs ResFPR:$Rd),
+                             (ins OpFPR:$Rn, OpVPR:$MRm, OpImm:$Imm),
+                             asmop # "\t$Rd, $Rn, $MRm" # rmlane # "[$Imm]",
+                             [],
+                             NoItinerary> {
+  bits<3> Imm;
+  bits<5> MRm;
+}
+
+class NeonI_ScalarXIndexedElemArith_Constraint_Impl<string asmop, bits<4> opcode,
+                                                    string rmlane,
+                                                    bit u, bit szhi, bit szlo,
+                                                    RegisterClass ResFPR,
+                                                    RegisterClass OpFPR,
+                                                    RegisterOperand OpVPR,
+                                                    Operand OpImm>
+  : NeonI_ScalarXIndexedElem<u, szhi, szlo, opcode,
+                             (outs ResFPR:$Rd),
+                             (ins ResFPR:$src, OpFPR:$Rn, OpVPR:$MRm, OpImm:$Imm),
+                             asmop # "\t$Rd, $Rn, $MRm" # rmlane # "[$Imm]",
+                             [],
+                             NoItinerary> {
+  let Constraints = "$src = $Rd";
+  bits<3> Imm;
+  bits<5> MRm;
+}
+
+// Scalar Floating Point  multiply (scalar, by element)
+def FMULssv_4S : NeonI_ScalarXIndexedElemArith<"fmul",
+  0b1001, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1}; // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def FMULddv_2D : NeonI_ScalarXIndexedElemArith<"fmul",
+  0b1001, ".d", 0b0, 0b1, 0b1, FPR64, FPR64, VPR128, neon_uimm1_bare> {
+  let Inst{11} = Imm{0}; // h
+  let Inst{21} = 0b0;    // l
+  let Inst{20-16} = MRm;
+}
+
+// Scalar Floating Point  multiply extended (scalar, by element)
+def FMULXssv_4S : NeonI_ScalarXIndexedElemArith<"fmulx",
+  0b1001, ".s", 0b1, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1}; // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def FMULXddv_2D : NeonI_ScalarXIndexedElemArith<"fmulx",
+  0b1001, ".d", 0b1, 0b1, 0b1, FPR64, FPR64, VPR128, neon_uimm1_bare> {
+  let Inst{11} = Imm{0}; // h
+  let Inst{21} = 0b0;    // l
+  let Inst{20-16} = MRm;
+}
+
+multiclass Neon_ScalarXIndexedElem_MUL_MULX_Patterns<
+  SDPatternOperator opnode,
+  Instruction INST,
+  ValueType ResTy, RegisterClass FPRC, ValueType OpTy, Operand OpImm,
+  ValueType OpNTy, ValueType ExTy, Operand OpNImm> {
+
+  def  : Pat<(ResTy (opnode (ResTy FPRC:$Rn),
+               (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm)))),
+             (ResTy (INST (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (opnode (ResTy FPRC:$Rn),
+               (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm)))),
+             (ResTy (INST (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+
+  // swapped operands
+  def  : Pat<(ResTy (opnode
+               (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm)),
+               (ResTy FPRC:$Rn))),
+             (ResTy (INST (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (opnode
+               (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm)),
+               (ResTy FPRC:$Rn))),
+             (ResTy (INST (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+}
+
+// Patterns for Scalar Floating Point  multiply (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MUL_MULX_Patterns<fmul, FMULssv_4S,
+  f32, FPR32, v4f32, neon_uimm2_bare, v2f32, v4f32, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_MULX_Patterns<fmul, FMULddv_2D,
+  f64, FPR64, v2f64, neon_uimm1_bare, v1f64, v2f64, neon_uimm0_bare>;
+
+// Patterns for Scalar Floating Point  multiply extended (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MUL_MULX_Patterns<int_aarch64_neon_vmulx,
+  FMULXssv_4S, f32, FPR32, v4f32, neon_uimm2_bare,
+  v2f32, v4f32, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_MULX_Patterns<int_aarch64_neon_vmulx,
+  FMULXddv_2D, f64, FPR64, v2f64, neon_uimm1_bare,
+  v1f64, v2f64, neon_uimm0_bare>;
+
+
+// Scalar Floating Point fused multiply-add (scalar, by element)
+def FMLAssv_4S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"fmla",
+  0b0001, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1}; // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def FMLAddv_2D : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"fmla",
+  0b0001, ".d", 0b0, 0b1, 0b1, FPR64, FPR64, VPR128, neon_uimm1_bare> {
+  let Inst{11} = Imm{0}; // h
+  let Inst{21} = 0b0;    // l
+  let Inst{20-16} = MRm;
+}
+
+// Scalar Floating Point fused multiply-subtract (scalar, by element)
+def FMLSssv_4S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"fmls",
+  0b0101, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1}; // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def FMLSddv_2D : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"fmls",
+  0b0101, ".d", 0b0, 0b1, 0b1, FPR64, FPR64, VPR128, neon_uimm1_bare> {
+  let Inst{11} = Imm{0}; // h
+  let Inst{21} = 0b0;    // l
+  let Inst{20-16} = MRm;
+}
+// We are allowed to match the fma instruction regardless of compile options.
+multiclass Neon_ScalarXIndexedElem_FMA_Patterns<
+  Instruction FMLAI, Instruction FMLSI,
+  ValueType ResTy, RegisterClass FPRC, ValueType OpTy, Operand OpImm,
+  ValueType OpNTy, ValueType ExTy, Operand OpNImm> {
+  // fmla
+  def  : Pat<(ResTy (fma (ResTy FPRC:$Rn),
+               (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm)),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLAI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (fma (ResTy FPRC:$Rn),
+               (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm)),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLAI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+
+  // swapped fmla operands
+  def  : Pat<(ResTy (fma
+               (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm)),
+               (ResTy FPRC:$Rn),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLAI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (fma
+               (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm)),
+               (ResTy FPRC:$Rn),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLAI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+
+  // fmls
+  def  : Pat<(ResTy (fma (ResTy FPRC:$Rn),
+               (fneg (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm))),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLSI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (fma (ResTy FPRC:$Rn),
+               (fneg (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm))),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLSI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+
+  // swapped fmls operands
+  def  : Pat<(ResTy (fma
+               (fneg (ResTy (vector_extract (OpTy VPR128:$MRm), OpImm:$Imm))),
+               (ResTy FPRC:$Rn),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLSI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn), (OpTy VPR128:$MRm), OpImm:$Imm))>;
+
+  def  : Pat<(ResTy (fma
+               (fneg (ResTy (vector_extract (OpNTy VPR64:$MRm), OpNImm:$Imm))),
+               (ResTy FPRC:$Rn),
+               (ResTy FPRC:$Ra))),
+             (ResTy (FMLSI (ResTy FPRC:$Ra),
+               (ResTy FPRC:$Rn),
+               (ExTy (SUBREG_TO_REG (i64 0), VPR64:$MRm, sub_64)),
+               OpNImm:$Imm))>;
+}
+
+// Scalar Floating Point fused multiply-add and
+// multiply-subtract (scalar, by element)
+defm : Neon_ScalarXIndexedElem_FMA_Patterns<FMLAssv_4S, FMLSssv_4S,
+  f32, FPR32, v4f32, neon_uimm2_bare, v2f32, v4f32, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_FMA_Patterns<FMLAddv_2D, FMLSddv_2D,
+  f64, FPR64, v2f64, neon_uimm1_bare, v1f64, v2f64, neon_uimm0_bare>;
+defm : Neon_ScalarXIndexedElem_FMA_Patterns<FMLAddv_2D, FMLSddv_2D,
+  f64, FPR64, v2f64, neon_uimm1_bare, v1f64, v2f64, neon_uimm0_bare>;
+
+// Scalar Signed saturating doubling multiply long (scalar, by element)
+def SQDMULLshv_4H : NeonI_ScalarXIndexedElemArith<"sqdmull",
+  0b1011, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR64Lo, neon_uimm2_bare> {
+  let Inst{11} = 0b0; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMULLshv_8H : NeonI_ScalarXIndexedElemArith<"sqdmull",
+  0b1011, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR128Lo, neon_uimm3_bare> {
+  let Inst{11} = Imm{2}; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMULLdsv_2S : NeonI_ScalarXIndexedElemArith<"sqdmull",
+  0b1011, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR64, neon_uimm1_bare> {
+  let Inst{11} = 0b0;    // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def SQDMULLdsv_4S : NeonI_ScalarXIndexedElemArith<"sqdmull",
+  0b1011, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1};    // h
+  let Inst{21} = Imm{0};    // l
+  let Inst{20-16} = MRm;
+}
+
+multiclass Neon_ScalarXIndexedElem_MUL_Patterns<
+  SDPatternOperator opnode,
+  Instruction INST,
+  ValueType ResTy, RegisterClass FPRC,
+  ValueType OpVTy, ValueType OpTy,
+  ValueType VecOpTy, ValueType ExTy, RegisterOperand VPRC, Operand OpImm> {
+
+  def  : Pat<(ResTy (opnode (OpVTy FPRC:$Rn),
+               (OpVTy (scalar_to_vector
+                 (ExTy (vector_extract (VecOpTy VPRC:$MRm), OpImm:$Imm)))))),
+             (ResTy (INST (OpVTy FPRC:$Rn), (VecOpTy VPRC:$MRm), OpImm:$Imm))>;
+
+  //swapped operands
+  def  : Pat<(ResTy (opnode
+               (OpVTy (scalar_to_vector
+                 (ExTy (vector_extract (VecOpTy VPRC:$MRm), OpImm:$Imm)))),
+                 (OpVTy FPRC:$Rn))),
+             (ResTy (INST (OpVTy FPRC:$Rn), (VecOpTy VPRC:$MRm), OpImm:$Imm))>;
+}
+
+
+// Patterns for Scalar Signed saturating doubling
+// multiply long (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmull,
+  SQDMULLshv_4H, v1i32, FPR16, v1i16, i16, v4i16,
+  i32, VPR64Lo, neon_uimm2_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmull,
+  SQDMULLshv_8H, v1i32, FPR16, v1i16, i16, v8i16,
+  i32, VPR128Lo, neon_uimm3_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmull,
+  SQDMULLdsv_2S, v1i64, FPR32, v1i32, i32, v2i32,
+  i32, VPR64Lo, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmull,
+  SQDMULLdsv_4S, v1i64, FPR32, v1i32, i32, v4i32,
+  i32, VPR128Lo, neon_uimm2_bare>;
+
+// Scalar Signed saturating doubling multiply-add long (scalar, by element)
+def SQDMLALshv_4H : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlal",
+  0b0011, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR64Lo, neon_uimm2_bare> {
+  let Inst{11} = 0b0; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMLALshv_8H : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlal",
+  0b0011, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR128Lo, neon_uimm3_bare> {
+  let Inst{11} = Imm{2}; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMLALdsv_2S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlal",
+  0b0011, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR64, neon_uimm1_bare> {
+  let Inst{11} = 0b0;    // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def SQDMLALdsv_4S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlal",
+  0b0011, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1};    // h
+  let Inst{21} = Imm{0};    // l
+  let Inst{20-16} = MRm;
+}
+
+// Scalar Signed saturating doubling
+// multiply-subtract long (scalar, by element)
+def SQDMLSLshv_4H : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlsl",
+  0b0111, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR64Lo, neon_uimm2_bare> {
+  let Inst{11} = 0b0; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMLSLshv_8H : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlsl",
+  0b0111, ".h", 0b0, 0b0, 0b1, FPR32, FPR16, VPR128Lo, neon_uimm3_bare> {
+  let Inst{11} = Imm{2}; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMLSLdsv_2S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlsl",
+  0b0111, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR64, neon_uimm1_bare> {
+  let Inst{11} = 0b0;    // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def SQDMLSLdsv_4S : NeonI_ScalarXIndexedElemArith_Constraint_Impl<"sqdmlsl",
+  0b0111, ".s", 0b0, 0b1, 0b0, FPR64, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1};    // h
+  let Inst{21} = Imm{0};    // l
+  let Inst{20-16} = MRm;
+}
+
+multiclass Neon_ScalarXIndexedElem_MLAL_Patterns<
+  SDPatternOperator opnode,
+  SDPatternOperator coreopnode,
+  Instruction INST,
+  ValueType ResTy, RegisterClass ResFPRC, RegisterClass FPRC,
+  ValueType OpTy,
+  ValueType OpVTy, ValueType ExTy, RegisterOperand VPRC, Operand OpImm> {
+
+  def  : Pat<(ResTy (opnode
+               (ResTy ResFPRC:$Ra),
+               (ResTy (coreopnode (OpTy FPRC:$Rn),
+                 (OpTy (scalar_to_vector
+                   (ExTy (vector_extract (OpVTy VPRC:$MRm), OpImm:$Imm)))))))),
+             (ResTy (INST (ResTy ResFPRC:$Ra),
+               (OpTy FPRC:$Rn), (OpVTy VPRC:$MRm), OpImm:$Imm))>;
+
+  // swapped operands
+  def  : Pat<(ResTy (opnode
+               (ResTy ResFPRC:$Ra),
+               (ResTy (coreopnode
+                 (OpTy (scalar_to_vector
+                   (ExTy (vector_extract (OpVTy VPRC:$MRm), OpImm:$Imm)))),
+                 (OpTy FPRC:$Rn))))),
+             (ResTy (INST (ResTy ResFPRC:$Ra),
+               (OpTy FPRC:$Rn), (OpVTy VPRC:$MRm), OpImm:$Imm))>;
+}
+
+// Patterns for Scalar Signed saturating
+// doubling multiply-add long (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqadds,
+  int_arm_neon_vqdmull, SQDMLALshv_4H, v1i32, FPR32, FPR16, v1i16, v4i16,
+  i32, VPR64Lo, neon_uimm2_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqadds,
+  int_arm_neon_vqdmull, SQDMLALshv_8H, v1i32, FPR32, FPR16, v1i16, v8i16,
+  i32, VPR128Lo, neon_uimm3_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqadds,
+  int_arm_neon_vqdmull, SQDMLALdsv_2S, v1i64, FPR64, FPR32, v1i32, v2i32,
+  i32, VPR64Lo, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqadds,
+  int_arm_neon_vqdmull, SQDMLALdsv_4S, v1i64, FPR64, FPR32, v1i32, v4i32,
+  i32, VPR128Lo, neon_uimm2_bare>;
+
+// Patterns for Scalar Signed saturating
+// doubling multiply-sub long (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqsubs,
+  int_arm_neon_vqdmull, SQDMLSLshv_4H, v1i32, FPR32, FPR16, v1i16, v4i16,
+  i32, VPR64Lo, neon_uimm2_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqsubs,
+  int_arm_neon_vqdmull, SQDMLSLshv_8H, v1i32, FPR32, FPR16, v1i16, v8i16,
+  i32, VPR128Lo, neon_uimm3_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqsubs,
+  int_arm_neon_vqdmull, SQDMLSLdsv_2S, v1i64, FPR64, FPR32, v1i32, v2i32,
+  i32, VPR64Lo, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MLAL_Patterns<int_arm_neon_vqsubs,
+  int_arm_neon_vqdmull, SQDMLSLdsv_4S, v1i64, FPR64, FPR32, v1i32, v4i32,
+  i32, VPR128Lo, neon_uimm2_bare>;
+
+
+// Scalar Signed saturating doubling multiply returning
+// high half (scalar, by element)
+def SQDMULHhhv_4H : NeonI_ScalarXIndexedElemArith<"sqdmulh",
+  0b1100, ".h", 0b0, 0b0, 0b1, FPR16, FPR16, VPR64Lo, neon_uimm2_bare> {
+  let Inst{11} = 0b0; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMULHhhv_8H : NeonI_ScalarXIndexedElemArith<"sqdmulh",
+  0b1100, ".h", 0b0, 0b0, 0b1, FPR16, FPR16, VPR128Lo, neon_uimm3_bare> {
+  let Inst{11} = Imm{2}; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQDMULHssv_2S : NeonI_ScalarXIndexedElemArith<"sqdmulh",
+  0b1100, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR64, neon_uimm1_bare> {
+  let Inst{11} = 0b0;    // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def SQDMULHssv_4S : NeonI_ScalarXIndexedElemArith<"sqdmulh",
+  0b1100, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1};    // h
+  let Inst{21} = Imm{0};    // l
+  let Inst{20-16} = MRm;
+}
+
+// Patterns for Scalar Signed saturating doubling multiply returning
+// high half (scalar, by element)
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmulh,
+  SQDMULHhhv_4H, v1i16, FPR16, v1i16, i16, v4i16,
+  i32, VPR64Lo, neon_uimm2_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmulh,
+  SQDMULHhhv_8H, v1i16, FPR16, v1i16, i16, v8i16,
+  i32, VPR128Lo, neon_uimm3_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmulh,
+  SQDMULHssv_2S, v1i32, FPR32, v1i32, i32, v2i32,
+  i32, VPR64Lo, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqdmulh,
+  SQDMULHssv_4S, v1i32, FPR32, v1i32, i32, v4i32,
+  i32, VPR128Lo, neon_uimm2_bare>;
+
+// Scalar Signed saturating rounding doubling multiply
+// returning high half (scalar, by element)
+def SQRDMULHhhv_4H : NeonI_ScalarXIndexedElemArith<"sqrdmulh",
+  0b1101, ".h", 0b0, 0b0, 0b1, FPR16, FPR16, VPR64Lo, neon_uimm2_bare> {
+  let Inst{11} = 0b0; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQRDMULHhhv_8H : NeonI_ScalarXIndexedElemArith<"sqrdmulh",
+  0b1101, ".h", 0b0, 0b0, 0b1, FPR16, FPR16, VPR128Lo, neon_uimm3_bare> {
+  let Inst{11} = Imm{2}; // h
+  let Inst{21} = Imm{1}; // l
+  let Inst{20} = Imm{0}; // m
+  let Inst{19-16} = MRm{3-0};
+}
+def SQRDMULHssv_2S : NeonI_ScalarXIndexedElemArith<"sqrdmulh",
+  0b1101, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR64, neon_uimm1_bare> {
+  let Inst{11} = 0b0;    // h
+  let Inst{21} = Imm{0}; // l
+  let Inst{20-16} = MRm;
+}
+def SQRDMULHssv_4S : NeonI_ScalarXIndexedElemArith<"sqrdmulh",
+  0b1101, ".s", 0b0, 0b1, 0b0, FPR32, FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{11} = Imm{1};    // h
+  let Inst{21} = Imm{0};    // l
+  let Inst{20-16} = MRm;
+}
+
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqrdmulh,
+  SQRDMULHhhv_4H, v1i16, FPR16, v1i16, i16, v4i16, i32,
+  VPR64Lo, neon_uimm2_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqrdmulh,
+  SQRDMULHhhv_8H, v1i16, FPR16, v1i16, i16, v8i16, i32,
+  VPR128Lo, neon_uimm3_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqrdmulh,
+  SQRDMULHssv_2S, v1i32, FPR32, v1i32, i32, v2i32, i32,
+  VPR64Lo, neon_uimm1_bare>;
+defm : Neon_ScalarXIndexedElem_MUL_Patterns<int_arm_neon_vqrdmulh,
+  SQRDMULHssv_4S, v1i32, FPR32, v1i32, i32, v4i32, i32,
+  VPR128Lo, neon_uimm2_bare>;
+
+// Scalar Copy - DUP element to scalar
+class NeonI_Scalar_DUP<string asmop, string asmlane,
+                       RegisterClass ResRC, RegisterOperand VPRC,
+                       Operand OpImm>
+  : NeonI_ScalarCopy<(outs ResRC:$Rd), (ins VPRC:$Rn, OpImm:$Imm),
+                     asmop # "\t$Rd, $Rn." # asmlane # "[$Imm]",
+                     [],
+                     NoItinerary> {
+  bits<4> Imm;
+}
+
+def DUPbv_B : NeonI_Scalar_DUP<"dup", "b", FPR8, VPR128, neon_uimm4_bare> {
+  let Inst{20-16} = {Imm{3}, Imm{2}, Imm{1}, Imm{0}, 0b1};
+}
+def DUPhv_H : NeonI_Scalar_DUP<"dup", "h", FPR16, VPR128, neon_uimm3_bare> {
+  let Inst{20-16} = {Imm{2}, Imm{1}, Imm{0}, 0b1, 0b0};
+}
+def DUPsv_S : NeonI_Scalar_DUP<"dup", "s", FPR32, VPR128, neon_uimm2_bare> {
+  let Inst{20-16} = {Imm{1}, Imm{0}, 0b1, 0b0, 0b0};
+}
+def DUPdv_D : NeonI_Scalar_DUP<"dup", "d", FPR64, VPR128, neon_uimm1_bare> {
+  let Inst{20-16} = {Imm, 0b1, 0b0, 0b0, 0b0};
+}
+
+multiclass NeonI_Scalar_DUP_Elt_pattern<Instruction DUPI, ValueType ResTy,
+  ValueType OpTy, Operand OpImm,
+  ValueType OpNTy, ValueType ExTy, Operand OpNImm> {
+  def : Pat<(ResTy (vector_extract (OpTy VPR128:$Rn), OpImm:$Imm)),
+            (ResTy (DUPI (OpTy VPR128:$Rn), OpImm:$Imm))>;
+
+  def : Pat<(ResTy (vector_extract (OpNTy VPR64:$Rn), OpNImm:$Imm)),
+            (ResTy (DUPI
+              (ExTy (SUBREG_TO_REG (i64 0), VPR64:$Rn, sub_64)),
+                OpNImm:$Imm))>;
+}
+
+multiclass NeonI_SDUP<PatFrag GetLow, PatFrag GetHigh,
+                 ValueType ResTy, ValueType OpTy> {
+  def : Pat<(ResTy (GetLow VPR128:$Rn)),
+            (ResTy (EXTRACT_SUBREG (OpTy VPR128:$Rn), sub_64))>;
+  def : Pat<(ResTy (GetHigh VPR128:$Rn)),
+            (ResTy (DUPdv_D (OpTy VPR128:$Rn), 1))>;
+}
+
+defm : NeonI_SDUP<Neon_Low16B, Neon_High16B, v8i8, v16i8>;
+defm : NeonI_SDUP<Neon_Low8H, Neon_High8H, v4i16, v8i16>;
+defm : NeonI_SDUP<Neon_Low4S, Neon_High4S, v2i32, v4i32>;
+defm : NeonI_SDUP<Neon_Low2D, Neon_High2D, v1i64, v2i64>;
+defm : NeonI_SDUP<Neon_Low4float, Neon_High4float, v2f32, v4f32>;
+defm : NeonI_SDUP<Neon_Low2double, Neon_High2double, v1f64, v2f64>;
+
+// Patterns for vector extract of FP data using scalar DUP instructions
+defm : NeonI_Scalar_DUP_Elt_pattern<DUPsv_S, f32,
+  v4f32, neon_uimm2_bare, v2f32, v4f32, neon_uimm1_bare>;
+defm : NeonI_Scalar_DUP_Elt_pattern<DUPdv_D, f64,
+  v2f64, neon_uimm1_bare, v1f64, v2f64, neon_uimm0_bare>;
+
+multiclass NeonI_Scalar_DUP_Vec_pattern<Instruction DUPI,
+  ValueType ResTy, ValueType OpTy,Operand OpLImm,
+  ValueType NOpTy, ValueType ExTy, Operand OpNImm> {
+
+  def : Pat<(ResTy (extract_subvector (OpTy VPR128:$Rn), OpLImm:$Imm)),
+            (ResTy (DUPI VPR128:$Rn, OpLImm:$Imm))>;
+
+  def : Pat<(ResTy (extract_subvector (NOpTy VPR64:$Rn), OpNImm:$Imm)),
+            (ResTy (DUPI
+              (ExTy (SUBREG_TO_REG (i64 0), VPR64:$Rn, sub_64)),
+                OpNImm:$Imm))>;
+}
+// Patterns for extract subvectors of v1ix data using scalar DUP instructions
+defm : NeonI_Scalar_DUP_Vec_pattern<DUPbv_B,
+  v1i8, v16i8, neon_uimm4_bare, v8i8, v16i8, neon_uimm3_bare>;
+defm : NeonI_Scalar_DUP_Vec_pattern<DUPhv_H,
+  v1i16, v8i16, neon_uimm3_bare, v4i16, v8i16, neon_uimm2_bare>;
+defm : NeonI_Scalar_DUP_Vec_pattern<DUPsv_S,
+  v1i32, v4i32, neon_uimm2_bare, v2i32, v4i32, neon_uimm1_bare>;
+
+
+multiclass NeonI_Scalar_DUP_alias<string asmop, string asmlane,
+                                  Instruction DUPI, Operand OpImm,
+                                  RegisterClass ResRC> {
+  def : NeonInstAlias<!strconcat(asmop, "$Rd, $Rn" # asmlane # "[$Imm]"),
+          (DUPI ResRC:$Rd, VPR128:$Rn, OpImm:$Imm), 0b0>;
+}
+
+// Aliases for Scalar copy - DUP element (scalar)
+// FIXME: This is actually the preferred syntax but TableGen can't deal with
+// custom printing of aliases.
+defm : NeonI_Scalar_DUP_alias<"mov", ".b", DUPbv_B, neon_uimm4_bare, FPR8>;
+defm : NeonI_Scalar_DUP_alias<"mov", ".h", DUPhv_H, neon_uimm3_bare, FPR16>;
+defm : NeonI_Scalar_DUP_alias<"mov", ".s", DUPsv_S, neon_uimm2_bare, FPR32>;
+defm : NeonI_Scalar_DUP_alias<"mov", ".d", DUPdv_D, neon_uimm1_bare, FPR64>;
+
 
 //===----------------------------------------------------------------------===//
 // Non-Instruction Patterns
@@ -4751,6 +6052,12 @@ def : Pat<(f32 (bitconvert (v1f32  FPR32:$src))), (f32 FPR32:$src)>;
 def : Pat<(f64 (bitconvert (v1f64  FPR64:$src))), (f64 FPR64:$src)>;
 
 def : Pat<(i64 (bitconvert (v1i64  FPR64:$src))), (FMOVxd $src)>;
+def : Pat<(i64 (bitconvert (v1f64  FPR64:$src))), (FMOVxd $src)>;
+def : Pat<(i64 (bitconvert (v2i32  FPR64:$src))), (FMOVxd $src)>;
+def : Pat<(i64 (bitconvert (v2f32  FPR64:$src))), (FMOVxd $src)>;
+def : Pat<(i64 (bitconvert (v4i16  FPR64:$src))), (FMOVxd $src)>;
+def : Pat<(i64 (bitconvert (v8i8  FPR64:$src))), (FMOVxd $src)>;
+
 def : Pat<(i32 (bitconvert (v1i32  FPR32:$src))), (FMOVws $src)>;
 
 def : Pat<(v8i8  (bitconvert (v1i64  VPR64:$src))), (v8i8 VPR64:$src)>;
@@ -4777,6 +6084,12 @@ def : Pat<(v1f32 (bitconvert (f32  FPR32:$src))), (v1f32 FPR32:$src)>;
 def : Pat<(v1f64 (bitconvert (f64  FPR64:$src))), (v1f64 FPR64:$src)>;
 
 def : Pat<(v1i64 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+def : Pat<(v1f64 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+def : Pat<(v2i32 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+def : Pat<(v2f32 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+def : Pat<(v4i16 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+def : Pat<(v8i8 (bitconvert (i64  GPR64:$src))), (FMOVdx $src)>;
+
 def : Pat<(v1i32 (bitconvert (i32  GPR32:$src))), (FMOVsw $src)>;
 
 def : Pat<(v8i8   (bitconvert (f64   FPR64:$src))), (v8i8 FPR64:$src)>;
@@ -4792,61 +6105,18 @@ def : Pat<(v2i64  (bitconvert (f128   FPR128:$src))), (v2i64 FPR128:$src)>;
 def : Pat<(v4f32  (bitconvert (f128   FPR128:$src))), (v4f32 FPR128:$src)>;
 def : Pat<(v2f64  (bitconvert (f128   FPR128:$src))), (v2f64 FPR128:$src)>;
 
-def neon_uimm0_bare : Operand<i64>,
-                        ImmLeaf<i64, [{return Imm == 0;}]> {
-  let ParserMatchClass = neon_uimm0_asmoperand;
-  let PrintMethod = "printUImmBareOperand";
-}
-
-def neon_uimm1_bare : Operand<i64>,
-                        ImmLeaf<i64, [{(void)Imm; return true;}]> {
-  let ParserMatchClass = neon_uimm1_asmoperand;
-  let PrintMethod = "printUImmBareOperand";
-}
-
-def neon_uimm2_bare : Operand<i64>,
-                        ImmLeaf<i64, [{(void)Imm; return true;}]> {
-  let ParserMatchClass = neon_uimm2_asmoperand;
-  let PrintMethod = "printUImmBareOperand";
-}
-
-def neon_uimm3_bare : Operand<i64>,
-                        ImmLeaf<i64, [{(void)Imm; return true;}]> {
-  let ParserMatchClass = uimm3_asmoperand;
-  let PrintMethod = "printUImmBareOperand";
-}
-
-def neon_uimm4_bare : Operand<i64>,
-                        ImmLeaf<i64, [{(void)Imm; return true;}]> {
-  let ParserMatchClass = uimm4_asmoperand;
-  let PrintMethod = "printUImmBareOperand";
-}
+// Scalar Three Same
 
 def neon_uimm3 : Operand<i64>,
-                   ImmLeaf<i64, [{(void)Imm; return true;}]> {
+                   ImmLeaf<i64, [{return Imm < 8;}]> {
   let ParserMatchClass = uimm3_asmoperand;
   let PrintMethod = "printUImmHexOperand";
 }
 
 def neon_uimm4 : Operand<i64>,
-                   ImmLeaf<i64, [{(void)Imm; return true;}]> {
+                   ImmLeaf<i64, [{return Imm < 16;}]> {
   let ParserMatchClass = uimm4_asmoperand;
   let PrintMethod = "printUImmHexOperand";
-}
-
-class NeonI_INS_main<string asmop, string Res, ValueType ResTy,
-                     RegisterClass OpGPR, ValueType OpTy, Operand OpImm>
-  : NeonI_copy<0b1, 0b0, 0b0011,
-               (outs VPR128:$Rd), (ins VPR128:$src, OpGPR:$Rn, OpImm:$Imm),
-               asmop # "\t$Rd." # Res # "[$Imm], $Rn",
-               [(set (ResTy VPR128:$Rd),
-                 (ResTy (vector_insert
-                   (ResTy VPR128:$src),
-                   (OpTy OpGPR:$Rn),
-                   (OpImm:$Imm))))],
-               NoItinerary> {
-  bits<4> Imm;
-  let Constraints = "$src = $Rd";
 }
 
 // Bitwise Extract
@@ -4889,6 +6159,56 @@ def : NI_Extract<v4i32, VPR128, EXTvvvi_16b, neon_uimm4>;
 def : NI_Extract<v2i64, VPR128, EXTvvvi_16b, neon_uimm4>;
 def : NI_Extract<v4f32, VPR128, EXTvvvi_16b, neon_uimm4>;
 def : NI_Extract<v2f64, VPR128, EXTvvvi_16b, neon_uimm4>;
+
+// Table lookup
+class NI_TBL<bit q, bits<2> op2, bits<2> len, bit op,
+             string asmop, string OpS, RegisterOperand OpVPR,
+             RegisterOperand VecList>
+  : NeonI_TBL<q, op2, len, op,
+              (outs OpVPR:$Rd), (ins VecList:$Rn, OpVPR:$Rm),
+              asmop # "\t$Rd." # OpS # ", $Rn, $Rm." # OpS,
+              [],
+              NoItinerary>;
+
+// The vectors in look up table are always 16b
+multiclass NI_TBL_pat<bits<2> len, bit op, string asmop, string List> {
+  def _8b  : NI_TBL<0, 0b00, len, op, asmop, "8b", VPR64,
+                    !cast<RegisterOperand>(List # "16B_operand")>;
+
+  def _16b : NI_TBL<1, 0b00, len, op, asmop, "16b", VPR128,
+                    !cast<RegisterOperand>(List # "16B_operand")>;
+}
+
+defm TBL1 : NI_TBL_pat<0b00, 0b0, "tbl", "VOne">;
+defm TBL2 : NI_TBL_pat<0b01, 0b0, "tbl", "VPair">;
+defm TBL3 : NI_TBL_pat<0b10, 0b0, "tbl", "VTriple">;
+defm TBL4 : NI_TBL_pat<0b11, 0b0, "tbl", "VQuad">;
+
+// Table lookup extention
+class NI_TBX<bit q, bits<2> op2, bits<2> len, bit op,
+             string asmop, string OpS, RegisterOperand OpVPR,
+             RegisterOperand VecList>
+  : NeonI_TBL<q, op2, len, op,
+              (outs OpVPR:$Rd), (ins OpVPR:$src, VecList:$Rn, OpVPR:$Rm),
+              asmop # "\t$Rd." # OpS # ", $Rn, $Rm." # OpS,
+              [],
+              NoItinerary> {
+  let Constraints = "$src = $Rd";
+}
+
+// The vectors in look up table are always 16b
+multiclass NI_TBX_pat<bits<2> len, bit op, string asmop, string List> {
+  def _8b  : NI_TBX<0, 0b00, len, op, asmop, "8b", VPR64,
+                    !cast<RegisterOperand>(List # "16B_operand")>;
+
+  def _16b : NI_TBX<1, 0b00, len, op, asmop, "16b", VPR128,
+                    !cast<RegisterOperand>(List # "16B_operand")>;
+}
+
+defm TBX1 : NI_TBX_pat<0b00, 0b1, "tbx", "VOne">;
+defm TBX2 : NI_TBX_pat<0b01, 0b1, "tbx", "VPair">;
+defm TBX3 : NI_TBX_pat<0b10, 0b1, "tbx", "VTriple">;
+defm TBX4 : NI_TBX_pat<0b11, 0b1, "tbx", "VQuad">;
 
 // The followings are for instruction class (3V Elem)
 
@@ -4972,7 +6292,7 @@ multiclass NI_2VE_v1_pat<string subop, SDPatternOperator op>
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_2s4s"), neon_uimm2_bare,
                      op, VPR64, VPR64, VPR128, v2i32, v2i32, v4i32,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low4S node:$LHS), node:$RHS)>>;
+                                 (Neon_Low4S node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_4s4s"), neon_uimm2_bare,
                      op, VPR128, VPR128, VPR128, v4i32, v4i32, v4i32,
@@ -4981,7 +6301,7 @@ multiclass NI_2VE_v1_pat<string subop, SDPatternOperator op>
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_4h8h"), neon_uimm3_bare,
                      op, VPR64, VPR64, VPR128Lo, v4i16, v4i16, v8i16,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low8H node:$LHS), node:$RHS)>>;
+                                 (Neon_Low8H node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_8h8h"), neon_uimm3_bare,
                      op, VPR128, VPR128, VPR128Lo, v8i16, v8i16, v8i16,
@@ -5089,7 +6409,7 @@ multiclass NI_2VE_mul_v1_pat<string subop, SDPatternOperator op> {
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_2s4s"), neon_uimm2_bare,
                          op, VPR64, VPR128, v2i32, v2i32, v4i32,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low4S node:$LHS), node:$RHS)>>;
+                                     (Neon_Low4S node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_4s4s"), neon_uimm2_bare,
                          op, VPR128, VPR128, v4i32, v4i32, v4i32,
@@ -5098,7 +6418,7 @@ multiclass NI_2VE_mul_v1_pat<string subop, SDPatternOperator op> {
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_4h8h"), neon_uimm3_bare,
                          op, VPR64, VPR128Lo, v4i16, v4i16, v8i16,
                          BinOpFrag<(Neon_vduplane
-                                    (Neon_low8H node:$LHS), node:$RHS)>>;
+                                    (Neon_Low8H node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_8h8h"), neon_uimm3_bare,
                          op, VPR128, VPR128Lo, v8i16, v8i16, v8i16,
@@ -5175,7 +6495,7 @@ multiclass NI_2VE_mul_v2_pat<string subop, SDPatternOperator op> {
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_2s4s"), neon_uimm2_bare,
                          op, VPR64, VPR128, v2f32, v2f32, v4f32,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low4f node:$LHS), node:$RHS)>>;
+                                     (Neon_Low4float node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_4s4s"), neon_uimm2_bare,
                          op, VPR128, VPR128, v4f32, v4f32, v4f32,
@@ -5272,7 +6592,7 @@ multiclass NI_2VE_fma_v2_pat<string subop, SDPatternOperator op> {
   def : NI_2VEswap_laneq<!cast<Instruction>(subop # "_2s4s"),
                          neon_uimm2_bare, op, VPR64, VPR128, v2f32, v4f32,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low4f node:$LHS), node:$RHS)>>;
+                                     (Neon_Low4float node:$LHS), node:$RHS)>>;
 
   def : NI_2VEswap_laneq<!cast<Instruction>(subop # "_4s4s"),
                          neon_uimm2_bare, op, VPR128, VPR128, v4f32, v4f32,
@@ -5306,12 +6626,12 @@ multiclass NI_2VE_fms_v2_pat<string subop, SDPatternOperator op>
   def : NI_2VEswap_laneq<!cast<Instruction>(subop # "_2s4s"),
                          neon_uimm2_bare, op, VPR64, VPR128, v2f32, v4f32,
                          BinOpFrag<(fneg (Neon_vduplane
-                                     (Neon_low4f node:$LHS), node:$RHS))>>;
+                                     (Neon_Low4float node:$LHS), node:$RHS))>>;
 
   def : NI_2VEswap_laneq<!cast<Instruction>(subop # "_2s4s"),
                          neon_uimm2_bare, op, VPR64, VPR128, v2f32, v4f32,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low4f (fneg node:$LHS)),
+                                     (Neon_Low4float (fneg node:$LHS)),
                                      node:$RHS)>>;
 
   def : NI_2VEswap_laneq<!cast<Instruction>(subop # "_4s4s"),
@@ -5479,22 +6799,22 @@ multiclass NI_2VEL_v3_pat<string subop, SDPatternOperator op> {
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_4s4h"), neon_uimm3_bare,
                      op, VPR128, VPR64, VPR128Lo, v4i32, v4i16, v8i16,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low8H node:$LHS), node:$RHS)>>;
+                                 (Neon_Low8H node:$LHS), node:$RHS)>>;
   
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_2d2s"), neon_uimm2_bare,
                      op, VPR128, VPR64, VPR128, v2i64, v2i32, v4i32,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low4S node:$LHS), node:$RHS)>>;
+                                 (Neon_Low4S node:$LHS), node:$RHS)>>;
   
   def : NI_2VEL2_laneq<!cast<Instruction>(subop # "_4s8h"), neon_uimm3_bare,
                        op, VPR128Lo, v4i32, v8i16, v8i16, v4i16, Neon_High8H,
                        BinOpFrag<(Neon_vduplane
-                                   (Neon_low8H node:$LHS), node:$RHS)>>;
+                                   (Neon_Low8H node:$LHS), node:$RHS)>>;
   
   def : NI_2VEL2_laneq<!cast<Instruction>(subop # "_2d4s"), neon_uimm2_bare,
                        op, VPR128, v2i64, v4i32, v4i32, v2i32, Neon_High4S,
                        BinOpFrag<(Neon_vduplane
-                                   (Neon_low4S node:$LHS), node:$RHS)>>;
+                                   (Neon_Low4S node:$LHS), node:$RHS)>>;
   
   // Index can only be half of the max value for lane in 64-bit vector
 
@@ -5545,23 +6865,23 @@ multiclass NI_2VEL_mul_v3_pat<string subop, SDPatternOperator op> {
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_4s4h"), neon_uimm3_bare,
                          op, VPR64, VPR128Lo, v4i32, v4i16, v8i16,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low8H node:$LHS), node:$RHS)>>;
+                                     (Neon_Low8H node:$LHS), node:$RHS)>>;
 
   def : NI_2VE_mul_laneq<!cast<Instruction>(subop # "_2d2s"), neon_uimm2_bare,
                          op, VPR64, VPR128, v2i64, v2i32, v4i32,
                          BinOpFrag<(Neon_vduplane
-                                     (Neon_low4S node:$LHS), node:$RHS)>>;
+                                     (Neon_Low4S node:$LHS), node:$RHS)>>;
 
   def : NI_2VEL2_mul_laneq<!cast<Instruction>(subop # "_4s8h"), neon_uimm3_bare,
                            op, VPR128Lo, v4i32, v8i16, v8i16, v4i16,
                            Neon_High8H,
                            BinOpFrag<(Neon_vduplane
-                                       (Neon_low8H node:$LHS), node:$RHS)>>;
+                                       (Neon_Low8H node:$LHS), node:$RHS)>>;
   
   def : NI_2VEL2_mul_laneq<!cast<Instruction>(subop # "_2d4s"), neon_uimm2_bare,
                            op, VPR128, v2i64, v4i32, v4i32, v2i32, Neon_High4S,
                            BinOpFrag<(Neon_vduplane
-                                       (Neon_low4S node:$LHS), node:$RHS)>>;
+                                       (Neon_Low4S node:$LHS), node:$RHS)>>;
   
   // Index can only be half of the max value for lane in 64-bit vector
 
@@ -5604,25 +6924,25 @@ multiclass NI_2VEL_v3_qdma_pat<string subop, string op> {
                      !cast<PatFrag>(op # "_4s"), VPR128, VPR64, VPR128Lo,
                      v4i32, v4i16, v8i16,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low8H node:$LHS), node:$RHS)>>;
+                                 (Neon_Low8H node:$LHS), node:$RHS)>>;
   
   def : NI_2VE_laneq<!cast<Instruction>(subop # "_2d2s"), neon_uimm2_bare,
                      !cast<PatFrag>(op # "_2d"), VPR128, VPR64, VPR128,
                      v2i64, v2i32, v4i32,
                      BinOpFrag<(Neon_vduplane
-                                 (Neon_low4S node:$LHS), node:$RHS)>>;
+                                 (Neon_Low4S node:$LHS), node:$RHS)>>;
   
   def : NI_2VEL2_laneq<!cast<Instruction>(subop # "_4s8h"), neon_uimm3_bare,
                        !cast<PatFrag>(op # "_4s"), VPR128Lo,
                        v4i32, v8i16, v8i16, v4i16, Neon_High8H,
                        BinOpFrag<(Neon_vduplane
-                                   (Neon_low8H node:$LHS), node:$RHS)>>;
+                                   (Neon_Low8H node:$LHS), node:$RHS)>>;
   
   def : NI_2VEL2_laneq<!cast<Instruction>(subop # "_2d4s"), neon_uimm2_bare,
                        !cast<PatFrag>(op # "_2d"), VPR128,
                        v2i64, v4i32, v4i32, v2i32, Neon_High4S,
                        BinOpFrag<(Neon_vduplane
-                                   (Neon_low4S node:$LHS), node:$RHS)>>;
+                                   (Neon_Low4S node:$LHS), node:$RHS)>>;
   
   // Index can only be half of the max value for lane in 64-bit vector
 
@@ -5652,6 +6972,21 @@ defm SQDMLSL_lane_v3 : NI_2VEL_v3_qdma_pat<"SQDMLSLvve", "Neon_qdmlsl">;
 
 // End of implementation for instruction class (3V Elem)
 
+class NeonI_INS_main<string asmop, string Res, ValueType ResTy,
+                     RegisterClass OpGPR, ValueType OpTy, Operand OpImm>
+  : NeonI_copy<0b1, 0b0, 0b0011,
+               (outs VPR128:$Rd), (ins VPR128:$src, OpGPR:$Rn, OpImm:$Imm),
+               asmop # "\t$Rd." # Res # "[$Imm], $Rn",
+               [(set (ResTy VPR128:$Rd),
+                 (ResTy (vector_insert
+                   (ResTy VPR128:$src),
+                   (OpTy OpGPR:$Rn),
+                   (OpImm:$Imm))))],
+               NoItinerary> {
+  bits<4> Imm;
+  let Constraints = "$src = $Rd";
+}
+
 //Insert element (vector, from main)
 def INSbw : NeonI_INS_main<"ins", "b", v16i8, GPR32, i32,
                            neon_uimm4_bare> {
@@ -5669,6 +7004,15 @@ def INSdx : NeonI_INS_main<"ins", "d", v2i64, GPR64, i64,
                            neon_uimm1_bare> {
   let Inst{20-16} = {Imm, 0b1, 0b0, 0b0, 0b0};
 }
+
+def : NeonInstAlias<"mov $Rd.b[$Imm], $Rn",
+                    (INSbw VPR128:$Rd, GPR32:$Rn, neon_uimm4_bare:$Imm), 0>;
+def : NeonInstAlias<"mov $Rd.h[$Imm], $Rn",
+                    (INShw VPR128:$Rd, GPR32:$Rn, neon_uimm3_bare:$Imm), 0>;
+def : NeonInstAlias<"mov $Rd.s[$Imm], $Rn",
+                    (INSsw VPR128:$Rd, GPR32:$Rn, neon_uimm2_bare:$Imm), 0>;
+def : NeonInstAlias<"mov $Rd.d[$Imm], $Rn",
+                    (INSdx VPR128:$Rd, GPR64:$Rn, neon_uimm1_bare:$Imm), 0>;
 
 class Neon_INS_main_pattern <ValueType ResTy,ValueType ExtResTy,
                              RegisterClass OpGPR, ValueType OpTy, 
@@ -5709,19 +7053,32 @@ def INSELb : NeonI_INS_element<"ins", "b", neon_uimm4_bare> {
 }
 def INSELh : NeonI_INS_element<"ins", "h", neon_uimm3_bare> {
   let Inst{20-16} = {Immd{2}, Immd{1}, Immd{0}, 0b1, 0b0};
-  let Inst{14-12} = {Immn{2}, Immn{1}, Immn{0}};
-  // bit 11 is unspecified.
+  let Inst{14-11} = {Immn{2}, Immn{1}, Immn{0}, 0b0};
+  // bit 11 is unspecified, but should be set to zero.
 }
 def INSELs : NeonI_INS_element<"ins", "s", neon_uimm2_bare> {
   let Inst{20-16} = {Immd{1}, Immd{0}, 0b1, 0b0, 0b0};
-  let Inst{14-13} = {Immn{1}, Immn{0}};
-  // bits 11-12 are unspecified.
+  let Inst{14-11} = {Immn{1}, Immn{0}, 0b0, 0b0};
+  // bits 11-12 are unspecified, but should be set to zero.
 }
 def INSELd : NeonI_INS_element<"ins", "d", neon_uimm1_bare> {
   let Inst{20-16} = {Immd, 0b1, 0b0, 0b0, 0b0};
-  let Inst{14} = Immn{0};
-  // bits 11-13 are unspecified.
+  let Inst{14-11} = {Immn{0}, 0b0, 0b0, 0b0};
+  // bits 11-13 are unspecified, but should be set to zero.
 }
+
+def : NeonInstAlias<"mov $Rd.b[$Immd], $Rn.b[$Immn]",
+                    (INSELb VPR128:$Rd, VPR128:$Rn,
+                      neon_uimm4_bare:$Immd, neon_uimm4_bare:$Immn), 0>;
+def : NeonInstAlias<"mov $Rd.h[$Immd], $Rn.h[$Immn]",
+                    (INSELh VPR128:$Rd, VPR128:$Rn,
+                      neon_uimm3_bare:$Immd, neon_uimm3_bare:$Immn), 0>;
+def : NeonInstAlias<"mov $Rd.s[$Immd], $Rn.s[$Immn]",
+                    (INSELs VPR128:$Rd, VPR128:$Rn,
+                      neon_uimm2_bare:$Immd, neon_uimm2_bare:$Immn), 0>;
+def : NeonInstAlias<"mov $Rd.d[$Immd], $Rn.d[$Immn]",
+                    (INSELd VPR128:$Rd, VPR128:$Rn,
+                      neon_uimm1_bare:$Immd, neon_uimm1_bare:$Immn), 0>;
 
 multiclass Neon_INS_elt_pattern<ValueType ResTy, ValueType NaTy,
                                 ValueType MidTy, Operand StImm, Operand NaImm,
@@ -5943,6 +7300,11 @@ def UMOVxd : NeonI_UMOV<"umov", "d", 0b1, v2i64, neon_uimm1_bare,
   let Inst{20-16} = {Imm, 0b1, 0b0, 0b0, 0b0};
 }
 
+def : NeonInstAlias<"mov $Rd, $Rn.s[$Imm]",
+                    (UMOVws GPR32:$Rd, VPR128:$Rn, neon_uimm2_bare:$Imm), 0>;
+def : NeonInstAlias<"mov $Rd, $Rn.d[$Imm]",
+                    (UMOVxd GPR64:$Rd, VPR128:$Rn, neon_uimm1_bare:$Imm), 0>;
+
 class Neon_UMOV_pattern <ValueType StTy, ValueType NaTy, ValueType ResTy,
                          Operand StImm,  Operand NaImm,
                          Instruction SMOVI>
@@ -6145,37 +7507,38 @@ class NeonI_DUP<bit Q, string asmop, string rdlane,
                NoItinerary>;
 
 def DUP16b : NeonI_DUP<0b1, "dup", ".16b", VPR128, v16i8, GPR32, i32> {
-  let Inst{16} = 0b1;
-  // bits 17-19 are unspecified.
+  let Inst{20-16} = 0b00001;
+  // bits 17-20 are unspecified, but should be set to zero.
 }
 
 def DUP8h : NeonI_DUP<0b1, "dup", ".8h", VPR128, v8i16, GPR32, i32> {
-  let Inst{17-16} = 0b10;
-  // bits 18-19 are unspecified.
+  let Inst{20-16} = 0b00010;
+  // bits 18-20 are unspecified, but should be set to zero.
 }
 
 def DUP4s : NeonI_DUP<0b1, "dup", ".4s", VPR128, v4i32, GPR32, i32> {
-  let Inst{18-16} = 0b100;
-  // bit 19 is unspecified.
+  let Inst{20-16} = 0b00100;
+  // bits 19-20 are unspecified, but should be set to zero.
 }
 
 def DUP2d : NeonI_DUP<0b1, "dup", ".2d", VPR128, v2i64, GPR64, i64> {
-  let Inst{19-16} = 0b1000;
+  let Inst{20-16} = 0b01000;
+  // bit 20 is unspecified, but should be set to zero.
 }
 
 def DUP8b : NeonI_DUP<0b0, "dup", ".8b", VPR64, v8i8, GPR32, i32> {
-  let Inst{16} = 0b1;
-  // bits 17-19 are unspecified.
+  let Inst{20-16} = 0b00001;
+  // bits 17-20 are unspecified, but should be set to zero.
 }
 
 def DUP4h : NeonI_DUP<0b0, "dup", ".4h", VPR64, v4i16, GPR32, i32> {
-  let Inst{17-16} = 0b10;
-  // bits 18-19 are unspecified.
+  let Inst{20-16} = 0b00010;
+  // bits 18-20 are unspecified, but should be set to zero.
 }
 
 def DUP2s : NeonI_DUP<0b0, "dup", ".2s", VPR64, v2i32, GPR32, i32> {
-  let Inst{18-16} = 0b100;
-  // bit 19 is unspecified.
+  let Inst{20-16} = 0b00100;
+  // bits 19-20 are unspecified, but should be set to zero.
 }
 
 // patterns for CONCAT_VECTORS
@@ -6215,6 +7578,852 @@ def : Pat<(v2f32 (extract_subvector (v4f32 VPR128:$Rn), (i64 0))),
 def : Pat<(v1f64 (extract_subvector (v2f64 VPR128:$Rn), (i64 0))),
           (v1f64 (EXTRACT_SUBREG VPR128:$Rn, sub_64))>;
 
+class NeonI_REV<string asmop, string Res, bits<2> size, bit Q, bit U,
+                bits<5> opcode, RegisterOperand ResVPR, ValueType ResTy,
+                SDPatternOperator Neon_Rev>
+  : NeonI_2VMisc<Q, U, size, opcode,
+               (outs ResVPR:$Rd), (ins ResVPR:$Rn),
+               asmop # "\t$Rd." # Res # ", $Rn." # Res,
+               [(set (ResTy ResVPR:$Rd),
+                  (ResTy (Neon_Rev (ResTy ResVPR:$Rn))))],
+               NoItinerary> ;
+
+def REV64_16b : NeonI_REV<"rev64", "16b", 0b00, 0b1, 0b0, 0b00000, VPR128,
+                          v16i8, Neon_rev64>;
+def REV64_8h : NeonI_REV<"rev64", "8h", 0b01, 0b1, 0b0, 0b00000, VPR128,
+                         v8i16, Neon_rev64>;
+def REV64_4s : NeonI_REV<"rev64", "4s", 0b10, 0b1, 0b0, 0b00000, VPR128,
+                         v4i32, Neon_rev64>;
+def REV64_8b : NeonI_REV<"rev64", "8b", 0b00, 0b0, 0b0, 0b00000, VPR64,
+                         v8i8, Neon_rev64>;
+def REV64_4h : NeonI_REV<"rev64", "4h", 0b01, 0b0, 0b0, 0b00000, VPR64,
+                         v4i16, Neon_rev64>;
+def REV64_2s : NeonI_REV<"rev64", "2s", 0b10, 0b0, 0b0, 0b00000, VPR64,
+                         v2i32, Neon_rev64>;
+
+def : Pat<(v4f32 (Neon_rev64 (v4f32 VPR128:$Rn))), (REV64_4s VPR128:$Rn)>;
+def : Pat<(v2f32 (Neon_rev64 (v2f32 VPR64:$Rn))), (REV64_2s VPR64:$Rn)>;
+
+def REV32_16b : NeonI_REV<"rev32", "16b", 0b00, 0b1, 0b1, 0b00000, VPR128,
+                          v16i8, Neon_rev32>;
+def REV32_8h : NeonI_REV<"rev32", "8h", 0b01, 0b1, 0b1, 0b00000, VPR128,
+                          v8i16, Neon_rev32>;
+def REV32_8b : NeonI_REV<"rev32", "8b", 0b00, 0b0, 0b1, 0b00000, VPR64,
+                         v8i8, Neon_rev32>;
+def REV32_4h : NeonI_REV<"rev32", "4h", 0b01, 0b0, 0b1, 0b00000, VPR64,
+                         v4i16, Neon_rev32>;
+
+def REV16_16b : NeonI_REV<"rev16", "16b", 0b00, 0b1, 0b0, 0b00001, VPR128,
+                          v16i8, Neon_rev16>;
+def REV16_8b : NeonI_REV<"rev16", "8b", 0b00, 0b0, 0b0, 0b00001, VPR64,
+                         v8i8, Neon_rev16>;
+
+multiclass NeonI_PairwiseAdd<string asmop, bit U, bits<5> opcode,
+                             SDPatternOperator Neon_Padd> {
+  def 16b8h : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                           (outs VPR128:$Rd), (ins VPR128:$Rn),
+                           asmop # "\t$Rd.8h, $Rn.16b",
+                           [(set (v8i16 VPR128:$Rd),
+                              (v8i16 (Neon_Padd (v16i8 VPR128:$Rn))))],
+                           NoItinerary>;
+  
+  def 8b4h : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$Rn),
+                          asmop # "\t$Rd.4h, $Rn.8b",
+                          [(set (v4i16 VPR64:$Rd),
+                             (v4i16 (Neon_Padd (v8i8 VPR64:$Rn))))],
+                          NoItinerary>;
+  
+  def 8h4s : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                           (outs VPR128:$Rd), (ins VPR128:$Rn),
+                           asmop # "\t$Rd.4s, $Rn.8h",
+                           [(set (v4i32 VPR128:$Rd),
+                              (v4i32 (Neon_Padd (v8i16 VPR128:$Rn))))],
+                           NoItinerary>;
+  
+  def 4h2s : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$Rn),
+                          asmop # "\t$Rd.2s, $Rn.4h",
+                          [(set (v2i32 VPR64:$Rd),
+                             (v2i32 (Neon_Padd (v4i16 VPR64:$Rn))))],
+                          NoItinerary>;
+  
+  def 4s2d : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                           (outs VPR128:$Rd), (ins VPR128:$Rn),
+                           asmop # "\t$Rd.2d, $Rn.4s",
+                           [(set (v2i64 VPR128:$Rd),
+                              (v2i64 (Neon_Padd (v4i32 VPR128:$Rn))))],
+                           NoItinerary>;
+  
+  def 2s1d : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$Rn),
+                          asmop # "\t$Rd.1d, $Rn.2s",
+                          [(set (v1i64 VPR64:$Rd),
+                             (v1i64 (Neon_Padd (v2i32 VPR64:$Rn))))],
+                          NoItinerary>;
+}
+
+defm SADDLP : NeonI_PairwiseAdd<"saddlp", 0b0, 0b00010,
+                                int_arm_neon_vpaddls>;
+defm UADDLP : NeonI_PairwiseAdd<"uaddlp", 0b1, 0b00010,
+                                int_arm_neon_vpaddlu>;
+
+multiclass NeonI_PairwiseAddAcc<string asmop, bit U, bits<5> opcode,
+                             SDPatternOperator Neon_Padd> {
+  let Constraints = "$src = $Rd" in {
+    def 16b8h : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                             (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                             asmop # "\t$Rd.8h, $Rn.16b",
+                             [(set (v8i16 VPR128:$Rd),
+                                (v8i16 (Neon_Padd 
+                                  (v8i16 VPR128:$src), (v16i8 VPR128:$Rn))))],
+                             NoItinerary>;
+    
+    def 8b4h : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                            (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                            asmop # "\t$Rd.4h, $Rn.8b",
+                            [(set (v4i16 VPR64:$Rd),
+                               (v4i16 (Neon_Padd 
+                                 (v4i16 VPR64:$src), (v8i8 VPR64:$Rn))))],
+                            NoItinerary>;
+    
+    def 8h4s : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "\t$Rd.4s, $Rn.8h",
+                            [(set (v4i32 VPR128:$Rd),
+                               (v4i32 (Neon_Padd
+                                 (v4i32 VPR128:$src), (v8i16 VPR128:$Rn))))],
+                            NoItinerary>;
+    
+    def 4h2s : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                            (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                            asmop # "\t$Rd.2s, $Rn.4h",
+                            [(set (v2i32 VPR64:$Rd),
+                               (v2i32 (Neon_Padd
+                                 (v2i32 VPR64:$src), (v4i16 VPR64:$Rn))))],
+                            NoItinerary>;
+    
+    def 4s2d : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "\t$Rd.2d, $Rn.4s",
+                            [(set (v2i64 VPR128:$Rd),
+                               (v2i64 (Neon_Padd
+                                 (v2i64 VPR128:$src), (v4i32 VPR128:$Rn))))],
+                            NoItinerary>;
+    
+    def 2s1d : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                            (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                            asmop # "\t$Rd.1d, $Rn.2s",
+                            [(set (v1i64 VPR64:$Rd),
+                               (v1i64 (Neon_Padd
+                                 (v1i64 VPR64:$src), (v2i32 VPR64:$Rn))))],
+                            NoItinerary>;
+  }
+}
+
+defm SADALP : NeonI_PairwiseAddAcc<"sadalp", 0b0, 0b00110,
+                                   int_arm_neon_vpadals>;
+defm UADALP : NeonI_PairwiseAddAcc<"uadalp", 0b1, 0b00110,
+                                   int_arm_neon_vpadalu>;
+
+multiclass NeonI_2VMisc_BHSDsize_1Arg<string asmop, bit U, bits<5> opcode> {
+  def 16b : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                         (outs VPR128:$Rd), (ins VPR128:$Rn),
+                         asmop # "\t$Rd.16b, $Rn.16b",
+                         [], NoItinerary>;
+  
+  def 8h : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.8h, $Rn.8h",
+                        [], NoItinerary>;
+  
+  def 4s : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.4s, $Rn.4s",
+                        [], NoItinerary>;
+  
+  def 2d : NeonI_2VMisc<0b1, U, 0b11, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.2d, $Rn.2d",
+                        [], NoItinerary>;
+  
+  def 8b : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                         (outs VPR64:$Rd), (ins VPR64:$Rn),
+                         asmop # "\t$Rd.8b, $Rn.8b",
+                         [], NoItinerary>;
+  
+  def 4h : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.4h, $Rn.4h",
+                        [], NoItinerary>;
+  
+  def 2s : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.2s, $Rn.2s",
+                        [], NoItinerary>;
+}
+
+defm SQABS : NeonI_2VMisc_BHSDsize_1Arg<"sqabs", 0b0, 0b00111>;
+defm SQNEG : NeonI_2VMisc_BHSDsize_1Arg<"sqneg", 0b1, 0b00111>;
+defm ABS : NeonI_2VMisc_BHSDsize_1Arg<"abs", 0b0, 0b01011>;
+defm NEG : NeonI_2VMisc_BHSDsize_1Arg<"neg", 0b1, 0b01011>;
+
+multiclass NeonI_2VMisc_BHSD_1Arg_Pattern<string Prefix,
+                                          SDPatternOperator Neon_Op> {
+  def : Pat<(v16i8 (Neon_Op (v16i8 VPR128:$Rn))),
+            (v16i8 (!cast<Instruction>(Prefix # 16b) (v16i8 VPR128:$Rn)))>;
+
+  def : Pat<(v8i16 (Neon_Op (v8i16 VPR128:$Rn))),
+            (v8i16 (!cast<Instruction>(Prefix # 8h) (v8i16 VPR128:$Rn)))>;
+
+  def : Pat<(v4i32 (Neon_Op (v4i32 VPR128:$Rn))),
+            (v4i32 (!cast<Instruction>(Prefix # 4s) (v4i32 VPR128:$Rn)))>;
+
+  def : Pat<(v2i64 (Neon_Op (v2i64 VPR128:$Rn))),
+            (v2i64 (!cast<Instruction>(Prefix # 2d) (v2i64 VPR128:$Rn)))>;
+
+  def : Pat<(v8i8 (Neon_Op (v8i8 VPR64:$Rn))),
+            (v8i8 (!cast<Instruction>(Prefix # 8b) (v8i8 VPR64:$Rn)))>;
+
+  def : Pat<(v4i16 (Neon_Op (v4i16 VPR64:$Rn))),
+            (v4i16 (!cast<Instruction>(Prefix # 4h) (v4i16 VPR64:$Rn)))>;
+
+  def : Pat<(v2i32 (Neon_Op (v2i32 VPR64:$Rn))),
+            (v2i32 (!cast<Instruction>(Prefix # 2s) (v2i32 VPR64:$Rn)))>;
+}
+
+defm : NeonI_2VMisc_BHSD_1Arg_Pattern<"SQABS", int_arm_neon_vqabs>;
+defm : NeonI_2VMisc_BHSD_1Arg_Pattern<"SQNEG", int_arm_neon_vqneg>;
+defm : NeonI_2VMisc_BHSD_1Arg_Pattern<"ABS", int_arm_neon_vabs>;
+
+def : Pat<(v16i8 (sub 
+            (v16i8 Neon_AllZero),
+            (v16i8 VPR128:$Rn))),
+          (v16i8 (NEG16b (v16i8 VPR128:$Rn)))>;
+def : Pat<(v8i8 (sub 
+            (v8i8 Neon_AllZero),
+            (v8i8 VPR64:$Rn))),
+          (v8i8 (NEG8b (v8i8 VPR64:$Rn)))>;
+def : Pat<(v8i16 (sub 
+            (v8i16 (bitconvert (v16i8 Neon_AllZero))),
+            (v8i16 VPR128:$Rn))),
+          (v8i16 (NEG8h (v8i16 VPR128:$Rn)))>;
+def : Pat<(v4i16 (sub 
+            (v4i16 (bitconvert (v8i8 Neon_AllZero))),
+            (v4i16 VPR64:$Rn))),
+          (v4i16 (NEG4h (v4i16 VPR64:$Rn)))>;
+def : Pat<(v4i32 (sub 
+            (v4i32 (bitconvert (v16i8 Neon_AllZero))),
+            (v4i32 VPR128:$Rn))),
+          (v4i32 (NEG4s (v4i32 VPR128:$Rn)))>;
+def : Pat<(v2i32 (sub 
+            (v2i32 (bitconvert (v8i8 Neon_AllZero))),
+            (v2i32 VPR64:$Rn))),
+          (v2i32 (NEG2s (v2i32 VPR64:$Rn)))>;
+def : Pat<(v2i64 (sub 
+            (v2i64 (bitconvert (v16i8 Neon_AllZero))),
+            (v2i64 VPR128:$Rn))),
+          (v2i64 (NEG2d (v2i64 VPR128:$Rn)))>;
+
+multiclass NeonI_2VMisc_BHSDsize_2Args<string asmop, bit U, bits<5> opcode> {
+  let Constraints = "$src = $Rd" in {
+    def 16b : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                           (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                           asmop # "\t$Rd.16b, $Rn.16b",
+                           [], NoItinerary>;
+    
+    def 8h : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                          asmop # "\t$Rd.8h, $Rn.8h",
+                          [], NoItinerary>;
+    
+    def 4s : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                          asmop # "\t$Rd.4s, $Rn.4s",
+                          [], NoItinerary>;
+    
+    def 2d : NeonI_2VMisc<0b1, U, 0b11, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                          asmop # "\t$Rd.2d, $Rn.2d",
+                          [], NoItinerary>;
+    
+    def 8b : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                          asmop # "\t$Rd.8b, $Rn.8b",
+                          [], NoItinerary>;
+    
+    def 4h : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                          asmop # "\t$Rd.4h, $Rn.4h",
+                          [], NoItinerary>;
+    
+    def 2s : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                          (outs VPR64:$Rd), (ins VPR64:$src, VPR64:$Rn),
+                          asmop # "\t$Rd.2s, $Rn.2s",
+                          [], NoItinerary>;
+  }
+}
+
+defm SUQADD : NeonI_2VMisc_BHSDsize_2Args<"suqadd", 0b0, 0b00011>;
+defm USQADD : NeonI_2VMisc_BHSDsize_2Args<"usqadd", 0b1, 0b00011>;
+
+multiclass NeonI_2VMisc_BHSD_2Args_Pattern<string Prefix,
+                                           SDPatternOperator Neon_Op> {
+  def : Pat<(v16i8 (Neon_Op (v16i8 VPR128:$src), (v16i8 VPR128:$Rn))),
+            (v16i8 (!cast<Instruction>(Prefix # 16b)
+              (v16i8 VPR128:$src), (v16i8 VPR128:$Rn)))>;
+
+  def : Pat<(v8i16 (Neon_Op (v8i16 VPR128:$src), (v8i16 VPR128:$Rn))),
+            (v8i16 (!cast<Instruction>(Prefix # 8h)
+              (v8i16 VPR128:$src), (v8i16 VPR128:$Rn)))>;
+
+  def : Pat<(v4i32 (Neon_Op (v4i32 VPR128:$src), (v4i32 VPR128:$Rn))),
+            (v4i32 (!cast<Instruction>(Prefix # 4s)
+              (v4i32 VPR128:$src), (v4i32 VPR128:$Rn)))>;
+
+  def : Pat<(v2i64 (Neon_Op (v2i64 VPR128:$src), (v2i64 VPR128:$Rn))),
+            (v2i64 (!cast<Instruction>(Prefix # 2d)
+              (v2i64 VPR128:$src), (v2i64 VPR128:$Rn)))>;
+
+  def : Pat<(v8i8 (Neon_Op (v8i8 VPR64:$src), (v8i8 VPR64:$Rn))),
+            (v8i8 (!cast<Instruction>(Prefix # 8b)
+              (v8i8 VPR64:$src), (v8i8 VPR64:$Rn)))>;
+
+  def : Pat<(v4i16 (Neon_Op (v4i16 VPR64:$src), (v4i16 VPR64:$Rn))),
+            (v4i16 (!cast<Instruction>(Prefix # 4h)
+              (v4i16 VPR64:$src), (v4i16 VPR64:$Rn)))>;
+
+  def : Pat<(v2i32 (Neon_Op (v2i32 VPR64:$src), (v2i32 VPR64:$Rn))),
+            (v2i32 (!cast<Instruction>(Prefix # 2s)
+              (v2i32 VPR64:$src), (v2i32 VPR64:$Rn)))>;
+}
+
+defm : NeonI_2VMisc_BHSD_2Args_Pattern<"SUQADD", int_aarch64_neon_suqadd>;
+defm : NeonI_2VMisc_BHSD_2Args_Pattern<"USQADD", int_aarch64_neon_usqadd>;
+
+multiclass NeonI_2VMisc_BHSsizes<string asmop, bit U,
+                          SDPatternOperator Neon_Op> {
+  def 16b : NeonI_2VMisc<0b1, U, 0b00, 0b00100,
+                         (outs VPR128:$Rd), (ins VPR128:$Rn),
+                         asmop # "\t$Rd.16b, $Rn.16b",
+                         [(set (v16i8 VPR128:$Rd),
+                            (v16i8 (Neon_Op (v16i8 VPR128:$Rn))))],
+                         NoItinerary>;
+  
+  def 8h : NeonI_2VMisc<0b1, U, 0b01, 0b00100,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.8h, $Rn.8h",
+                        [(set (v8i16 VPR128:$Rd),
+                           (v8i16 (Neon_Op (v8i16 VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 4s : NeonI_2VMisc<0b1, U, 0b10, 0b00100,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.4s, $Rn.4s",
+                        [(set (v4i32 VPR128:$Rd),
+                           (v4i32 (Neon_Op (v4i32 VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 8b : NeonI_2VMisc<0b0, U, 0b00, 0b00100,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.8b, $Rn.8b",
+                        [(set (v8i8 VPR64:$Rd),
+                           (v8i8 (Neon_Op (v8i8 VPR64:$Rn))))],
+                        NoItinerary>;
+  
+  def 4h : NeonI_2VMisc<0b0, U, 0b01, 0b00100,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.4h, $Rn.4h",
+                        [(set (v4i16 VPR64:$Rd),
+                           (v4i16 (Neon_Op (v4i16 VPR64:$Rn))))],
+                        NoItinerary>;
+  
+  def 2s : NeonI_2VMisc<0b0, U, 0b10, 0b00100,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.2s, $Rn.2s",
+                        [(set (v2i32 VPR64:$Rd),
+                           (v2i32 (Neon_Op (v2i32 VPR64:$Rn))))],
+                        NoItinerary>;
+}
+
+defm CLS : NeonI_2VMisc_BHSsizes<"cls", 0b0, int_arm_neon_vcls>;
+defm CLZ : NeonI_2VMisc_BHSsizes<"clz", 0b1, ctlz>;
+
+multiclass NeonI_2VMisc_Bsize<string asmop, bit U, bits<2> size,
+                              bits<5> Opcode> {
+  def 16b : NeonI_2VMisc<0b1, U, size, Opcode,
+                         (outs VPR128:$Rd), (ins VPR128:$Rn),
+                         asmop # "\t$Rd.16b, $Rn.16b",
+                         [], NoItinerary>;
+  
+  def 8b : NeonI_2VMisc<0b0, U, size, Opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.8b, $Rn.8b",
+                        [], NoItinerary>;
+}
+
+defm CNT : NeonI_2VMisc_Bsize<"cnt", 0b0, 0b00, 0b00101>;
+defm NOT : NeonI_2VMisc_Bsize<"not", 0b1, 0b00, 0b00101>;
+defm RBIT : NeonI_2VMisc_Bsize<"rbit", 0b1, 0b01, 0b00101>;
+
+def : NeonInstAlias<"mvn $Rd.16b, $Rn.16b",
+                    (NOT16b VPR128:$Rd, VPR128:$Rn), 0>;
+def : NeonInstAlias<"mvn $Rd.8b, $Rn.8b",
+                    (NOT8b VPR64:$Rd, VPR64:$Rn), 0>;
+
+def : Pat<(v16i8 (ctpop (v16i8 VPR128:$Rn))),
+          (v16i8 (CNT16b (v16i8 VPR128:$Rn)))>;
+def : Pat<(v8i8 (ctpop (v8i8 VPR64:$Rn))),
+          (v8i8 (CNT8b (v8i8 VPR64:$Rn)))>;
+
+def : Pat<(v16i8 (xor 
+            (v16i8 VPR128:$Rn),
+            (v16i8 Neon_AllOne))),
+          (v16i8 (NOT16b (v16i8 VPR128:$Rn)))>;
+def : Pat<(v8i8 (xor 
+            (v8i8 VPR64:$Rn),
+            (v8i8 Neon_AllOne))),
+          (v8i8 (NOT8b (v8i8 VPR64:$Rn)))>;
+def : Pat<(v8i16 (xor 
+            (v8i16 VPR128:$Rn),
+            (v8i16 (bitconvert (v16i8 Neon_AllOne))))),
+          (NOT16b VPR128:$Rn)>;
+def : Pat<(v4i16 (xor 
+            (v4i16 VPR64:$Rn),
+            (v4i16 (bitconvert (v8i8 Neon_AllOne))))),
+          (NOT8b VPR64:$Rn)>;
+def : Pat<(v4i32 (xor 
+            (v4i32 VPR128:$Rn),
+            (v4i32 (bitconvert (v16i8 Neon_AllOne))))),
+          (NOT16b VPR128:$Rn)>;
+def : Pat<(v2i32 (xor 
+            (v2i32 VPR64:$Rn),
+            (v2i32 (bitconvert (v8i8 Neon_AllOne))))),
+          (NOT8b VPR64:$Rn)>;
+def : Pat<(v2i64 (xor 
+            (v2i64 VPR128:$Rn),
+            (v2i64 (bitconvert (v16i8 Neon_AllOne))))),
+          (NOT16b VPR128:$Rn)>;
+
+def : Pat<(v16i8 (int_aarch64_neon_rbit (v16i8 VPR128:$Rn))),
+          (v16i8 (RBIT16b (v16i8 VPR128:$Rn)))>;
+def : Pat<(v8i8 (int_aarch64_neon_rbit (v8i8 VPR64:$Rn))),
+          (v8i8 (RBIT8b (v8i8 VPR64:$Rn)))>;
+
+multiclass NeonI_2VMisc_SDsizes<string asmop, bit U, bits<5> opcode,
+                                SDPatternOperator Neon_Op> {
+  def 4s : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.4s, $Rn.4s",
+                        [(set (v4f32 VPR128:$Rd),
+                           (v4f32 (Neon_Op (v4f32 VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 2d : NeonI_2VMisc<0b1, U, 0b11, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.2d, $Rn.2d",
+                        [(set (v2f64 VPR128:$Rd),
+                           (v2f64 (Neon_Op (v2f64 VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 2s : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.2s, $Rn.2s",
+                        [(set (v2f32 VPR64:$Rd),
+                           (v2f32 (Neon_Op (v2f32 VPR64:$Rn))))],
+                        NoItinerary>;
+}
+
+defm FABS : NeonI_2VMisc_SDsizes<"fabs", 0b0, 0b01111, fabs>;
+defm FNEG : NeonI_2VMisc_SDsizes<"fneg", 0b1, 0b01111, fneg>;
+
+multiclass NeonI_2VMisc_HSD_Narrow<string asmop, bit U, bits<5> opcode> {
+  def 8h8b : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.8b, $Rn.8h",
+                          [], NoItinerary>;
+
+  def 4s4h : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.4h, $Rn.4s",
+                          [], NoItinerary>;
+
+  def 2d2s : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.2s, $Rn.2d",
+                          [], NoItinerary>;
+
+  let Constraints = "$Rd = $src" in {
+    def 8h16b : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                             (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                             asmop # "2\t$Rd.16b, $Rn.8h",
+                             [], NoItinerary>;
+  
+    def 4s8h : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "2\t$Rd.8h, $Rn.4s",
+                            [], NoItinerary>;
+  
+    def 2d4s : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "2\t$Rd.4s, $Rn.2d",
+                            [], NoItinerary>;
+  }
+}
+
+defm XTN : NeonI_2VMisc_HSD_Narrow<"xtn", 0b0, 0b10010>;
+defm SQXTUN : NeonI_2VMisc_HSD_Narrow<"sqxtun", 0b1, 0b10010>;
+defm SQXTN : NeonI_2VMisc_HSD_Narrow<"sqxtn", 0b0, 0b10100>;
+defm UQXTN : NeonI_2VMisc_HSD_Narrow<"uqxtn", 0b1, 0b10100>;
+
+multiclass NeonI_2VMisc_Narrow_Patterns<string Prefix, 
+                                        SDPatternOperator Neon_Op> {
+  def : Pat<(v8i8 (Neon_Op (v8i16 VPR128:$Rn))),
+            (v8i8 (!cast<Instruction>(Prefix # 8h8b) (v8i16 VPR128:$Rn)))>;
+
+  def : Pat<(v4i16 (Neon_Op (v4i32 VPR128:$Rn))),
+            (v4i16 (!cast<Instruction>(Prefix # 4s4h) (v4i32 VPR128:$Rn)))>;
+
+  def : Pat<(v2i32 (Neon_Op (v2i64 VPR128:$Rn))),
+            (v2i32 (!cast<Instruction>(Prefix # 2d2s) (v2i64 VPR128:$Rn)))>;
+  
+  def : Pat<(v16i8 (concat_vectors
+              (v8i8 VPR64:$src),
+              (v8i8 (Neon_Op (v8i16 VPR128:$Rn))))),
+            (!cast<Instruction>(Prefix # 8h16b) 
+              (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64),
+              VPR128:$Rn)>;
+
+  def : Pat<(v8i16 (concat_vectors
+              (v4i16 VPR64:$src),
+              (v4i16 (Neon_Op (v4i32 VPR128:$Rn))))),
+            (!cast<Instruction>(Prefix # 4s8h)
+              (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64),
+              VPR128:$Rn)>;
+
+  def : Pat<(v4i32 (concat_vectors
+              (v2i32 VPR64:$src),
+              (v2i32 (Neon_Op (v2i64 VPR128:$Rn))))),
+            (!cast<Instruction>(Prefix # 2d4s)
+              (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64),
+              VPR128:$Rn)>;
+}
+
+defm : NeonI_2VMisc_Narrow_Patterns<"XTN", trunc>;
+defm : NeonI_2VMisc_Narrow_Patterns<"SQXTUN", int_arm_neon_vqmovnsu>;
+defm : NeonI_2VMisc_Narrow_Patterns<"SQXTN", int_arm_neon_vqmovns>;
+defm : NeonI_2VMisc_Narrow_Patterns<"UQXTN", int_arm_neon_vqmovnu>;
+
+multiclass NeonI_2VMisc_SHIFT<string asmop, bit U, bits<5> opcode> {
+  def 8b8h : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR64:$Rn, uimm_exact8:$Imm),
+                          asmop # "\t$Rd.8h, $Rn.8b, $Imm",
+                          [], NoItinerary>;
+
+  def 4h4s : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR64:$Rn, uimm_exact16:$Imm),
+                          asmop # "\t$Rd.4s, $Rn.4h, $Imm",
+                          [], NoItinerary>;
+
+  def 2s2d : NeonI_2VMisc<0b0, U, 0b10, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR64:$Rn, uimm_exact32:$Imm),
+                          asmop # "\t$Rd.2d, $Rn.2s, $Imm",
+                          [], NoItinerary>;
+
+  def 16b8h : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR128:$Rn, uimm_exact8:$Imm),
+                          asmop # "2\t$Rd.8h, $Rn.16b, $Imm",
+                          [], NoItinerary>;
+
+  def 8h4s : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR128:$Rn, uimm_exact16:$Imm),
+                          asmop # "2\t$Rd.4s, $Rn.8h, $Imm",
+                          [], NoItinerary>;
+
+  def 4s2d : NeonI_2VMisc<0b1, U, 0b10, opcode,
+                          (outs VPR128:$Rd),
+                          (ins VPR128:$Rn, uimm_exact32:$Imm),
+                          asmop # "2\t$Rd.2d, $Rn.4s, $Imm",
+                          [], NoItinerary>;
+}
+
+defm SHLL : NeonI_2VMisc_SHIFT<"shll", 0b1, 0b10011>;
+
+class NeonI_SHLL_Patterns<ValueType OpTy, ValueType DesTy,
+                          SDPatternOperator ExtOp, Operand Neon_Imm,
+                          string suffix> 
+  : Pat<(DesTy (shl
+          (DesTy (ExtOp (OpTy VPR64:$Rn))),
+            (DesTy (Neon_vdup
+              (i32 Neon_Imm:$Imm))))),
+        (!cast<Instruction>("SHLL" # suffix) VPR64:$Rn, Neon_Imm:$Imm)>;
+    
+class NeonI_SHLL_High_Patterns<ValueType OpTy, ValueType DesTy,
+                               SDPatternOperator ExtOp, Operand Neon_Imm,
+                               string suffix, PatFrag GetHigh> 
+  : Pat<(DesTy (shl
+          (DesTy (ExtOp
+            (OpTy (GetHigh VPR128:$Rn)))),
+              (DesTy (Neon_vdup
+                (i32 Neon_Imm:$Imm))))),
+        (!cast<Instruction>("SHLL" # suffix) VPR128:$Rn, Neon_Imm:$Imm)>;
+
+def : NeonI_SHLL_Patterns<v8i8, v8i16, zext, uimm_exact8, "8b8h">;
+def : NeonI_SHLL_Patterns<v8i8, v8i16, sext, uimm_exact8, "8b8h">;
+def : NeonI_SHLL_Patterns<v4i16, v4i32, zext, uimm_exact16, "4h4s">;
+def : NeonI_SHLL_Patterns<v4i16, v4i32, sext, uimm_exact16, "4h4s">;
+def : NeonI_SHLL_Patterns<v2i32, v2i64, zext, uimm_exact32, "2s2d">;
+def : NeonI_SHLL_Patterns<v2i32, v2i64, sext, uimm_exact32, "2s2d">;
+def : NeonI_SHLL_High_Patterns<v8i8, v8i16, zext, uimm_exact8, "16b8h",
+                               Neon_High16B>;
+def : NeonI_SHLL_High_Patterns<v8i8, v8i16, sext, uimm_exact8, "16b8h",
+                               Neon_High16B>;
+def : NeonI_SHLL_High_Patterns<v4i16, v4i32, zext, uimm_exact16, "8h4s",
+                               Neon_High8H>;
+def : NeonI_SHLL_High_Patterns<v4i16, v4i32, sext, uimm_exact16, "8h4s",
+                               Neon_High8H>;
+def : NeonI_SHLL_High_Patterns<v2i32, v2i64, zext, uimm_exact32, "4s2d",
+                               Neon_High4S>;
+def : NeonI_SHLL_High_Patterns<v2i32, v2i64, sext, uimm_exact32, "4s2d",
+                               Neon_High4S>;
+
+multiclass NeonI_2VMisc_SD_Narrow<string asmop, bit U, bits<5> opcode> {
+  def 4s4h : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.4h, $Rn.4s",
+                          [], NoItinerary>;
+
+  def 2d2s : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.2s, $Rn.2d",
+                          [], NoItinerary>;
+  
+  let Constraints = "$src = $Rd" in {
+    def 4s8h : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "2\t$Rd.8h, $Rn.4s",
+                            [], NoItinerary>;
+  
+    def 2d4s : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                            (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                            asmop # "2\t$Rd.4s, $Rn.2d",
+                            [], NoItinerary>;
+  }
+}
+
+defm FCVTN : NeonI_2VMisc_SD_Narrow<"fcvtn", 0b0, 0b10110>;
+
+multiclass NeonI_2VMisc_Narrow_Pattern<string prefix,
+                                       SDPatternOperator f32_to_f16_Op,
+                                       SDPatternOperator f64_to_f32_Op> {
+  
+  def : Pat<(v4i16 (f32_to_f16_Op (v4f32 VPR128:$Rn))),
+              (!cast<Instruction>(prefix # "4s4h") (v4f32 VPR128:$Rn))>;
+  
+  def : Pat<(v8i16 (concat_vectors
+                (v4i16 VPR64:$src),
+                (v4i16 (f32_to_f16_Op (v4f32 VPR128:$Rn))))),
+                  (!cast<Instruction>(prefix # "4s8h")
+                    (v4f32 (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64)),
+                    (v4f32 VPR128:$Rn))>;  
+    
+  def : Pat<(v2f32 (f64_to_f32_Op (v2f64 VPR128:$Rn))),
+            (!cast<Instruction>(prefix # "2d2s") (v2f64 VPR128:$Rn))>;
+  
+  def : Pat<(v4f32 (concat_vectors
+              (v2f32 VPR64:$src),
+              (v2f32 (f64_to_f32_Op (v2f64 VPR128:$Rn))))),
+                (!cast<Instruction>(prefix # "2d4s")
+                  (v4f32 (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64)),
+                  (v2f64 VPR128:$Rn))>;
+}
+
+defm : NeonI_2VMisc_Narrow_Pattern<"FCVTN", int_arm_neon_vcvtfp2hf, fround>;
+
+multiclass NeonI_2VMisc_D_Narrow<string asmop, string prefix, bit U,
+                                 bits<5> opcode> {
+  def 2d2s : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR64:$Rd), (ins VPR128:$Rn),
+                          asmop # "\t$Rd.2s, $Rn.2d",
+                          [], NoItinerary>;
+
+  def 2d4s : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$src, VPR128:$Rn),
+                          asmop # "2\t$Rd.4s, $Rn.2d",
+                          [], NoItinerary> {
+    let Constraints = "$src = $Rd";
+  }
+  
+  def : Pat<(v2f32 (int_aarch64_neon_fcvtxn (v2f64 VPR128:$Rn))),
+            (!cast<Instruction>(prefix # "2d2s") VPR128:$Rn)>;
+
+  def : Pat<(v4f32 (concat_vectors
+              (v2f32 VPR64:$src),
+              (v2f32 (int_aarch64_neon_fcvtxn (v2f64 VPR128:$Rn))))),
+            (!cast<Instruction>(prefix # "2d4s")
+               (v4f32 (SUBREG_TO_REG (i32 0), VPR64:$src, sub_64)),
+               VPR128:$Rn)>;
+}
+
+defm FCVTXN : NeonI_2VMisc_D_Narrow<"fcvtxn","FCVTXN", 0b1, 0b10110>;
+
+def Neon_High4Float : PatFrag<(ops node:$in),
+                              (extract_subvector (v4f32 node:$in), (iPTR 2))>;
+
+multiclass NeonI_2VMisc_HS_Extend<string asmop, bit U, bits<5> opcode> {
+  def 4h4s : NeonI_2VMisc<0b0, U, 0b00, opcode,
+                          (outs VPR128:$Rd), (ins VPR64:$Rn),
+                          asmop # "\t$Rd.4s, $Rn.4h",
+                          [], NoItinerary>;
+
+  def 2s2d : NeonI_2VMisc<0b0, U, 0b01, opcode,
+                          (outs VPR128:$Rd), (ins VPR64:$Rn),
+                          asmop # "\t$Rd.2d, $Rn.2s",
+                          [], NoItinerary>;
+
+  def 8h4s : NeonI_2VMisc<0b1, U, 0b00, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$Rn),
+                          asmop # "2\t$Rd.4s, $Rn.8h",
+                          [], NoItinerary>;
+
+  def 4s2d : NeonI_2VMisc<0b1, U, 0b01, opcode,
+                          (outs VPR128:$Rd), (ins VPR128:$Rn),
+                          asmop # "2\t$Rd.2d, $Rn.4s",
+                          [], NoItinerary>;
+}
+
+defm FCVTL : NeonI_2VMisc_HS_Extend<"fcvtl", 0b0, 0b10111>;
+
+multiclass NeonI_2VMisc_Extend_Pattern<string prefix> {
+  def : Pat<(v4f32 (int_arm_neon_vcvthf2fp (v4i16 VPR64:$Rn))),
+            (!cast<Instruction>(prefix # "4h4s") VPR64:$Rn)>;
+  
+  def : Pat<(v4f32 (int_arm_neon_vcvthf2fp
+              (v4i16 (Neon_High8H
+                (v8i16 VPR128:$Rn))))),
+            (!cast<Instruction>(prefix # "8h4s") VPR128:$Rn)>;
+  
+  def : Pat<(v2f64 (fextend (v2f32 VPR64:$Rn))),
+            (!cast<Instruction>(prefix # "2s2d") VPR64:$Rn)>;
+  
+  def : Pat<(v2f64 (fextend
+              (v2f32 (Neon_High4Float
+                (v4f32 VPR128:$Rn))))),
+            (!cast<Instruction>(prefix # "4s2d") VPR128:$Rn)>;
+}
+
+defm : NeonI_2VMisc_Extend_Pattern<"FCVTL">;
+
+multiclass NeonI_2VMisc_SD_Conv<string asmop, bit Size, bit U, bits<5> opcode,
+                                ValueType ResTy4s, ValueType OpTy4s,
+                                ValueType ResTy2d, ValueType OpTy2d,
+                                ValueType ResTy2s, ValueType OpTy2s,
+                                SDPatternOperator Neon_Op> {
+  
+  def 4s : NeonI_2VMisc<0b1, U, {Size, 0b0}, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.4s, $Rn.4s",
+                        [(set (ResTy4s VPR128:$Rd),
+                           (ResTy4s (Neon_Op (OpTy4s VPR128:$Rn))))],
+                        NoItinerary>;
+
+  def 2d : NeonI_2VMisc<0b1, U, {Size, 0b1}, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.2d, $Rn.2d",
+                        [(set (ResTy2d VPR128:$Rd),
+                           (ResTy2d (Neon_Op (OpTy2d VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 2s : NeonI_2VMisc<0b0, U, {Size, 0b0}, opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.2s, $Rn.2s",
+                        [(set (ResTy2s VPR64:$Rd),
+                           (ResTy2s (Neon_Op (OpTy2s VPR64:$Rn))))],
+                        NoItinerary>;
+}
+
+multiclass NeonI_2VMisc_fp_to_int<string asmop, bit Size, bit U,
+                                  bits<5> opcode, SDPatternOperator Neon_Op> {
+  defm _ : NeonI_2VMisc_SD_Conv<asmop, Size, U, opcode, v4i32, v4f32, v2i64,
+                                v2f64, v2i32, v2f32, Neon_Op>;
+}
+
+defm FCVTNS : NeonI_2VMisc_fp_to_int<"fcvtns", 0b0, 0b0, 0b11010,
+                                     int_aarch64_neon_fcvtns>;
+defm FCVTNU : NeonI_2VMisc_fp_to_int<"fcvtnu", 0b0, 0b1, 0b11010,
+                                     int_aarch64_neon_fcvtnu>;
+defm FCVTPS : NeonI_2VMisc_fp_to_int<"fcvtps", 0b1, 0b0, 0b11010,
+                                     int_aarch64_neon_fcvtps>;
+defm FCVTPU : NeonI_2VMisc_fp_to_int<"fcvtpu", 0b1, 0b1, 0b11010,
+                                     int_aarch64_neon_fcvtpu>;
+defm FCVTMS : NeonI_2VMisc_fp_to_int<"fcvtms", 0b0, 0b0, 0b11011,
+                                     int_aarch64_neon_fcvtms>;
+defm FCVTMU : NeonI_2VMisc_fp_to_int<"fcvtmu", 0b0, 0b1, 0b11011,
+                                     int_aarch64_neon_fcvtmu>;
+defm FCVTZS : NeonI_2VMisc_fp_to_int<"fcvtzs", 0b1, 0b0, 0b11011, fp_to_sint>;
+defm FCVTZU : NeonI_2VMisc_fp_to_int<"fcvtzu", 0b1, 0b1, 0b11011, fp_to_uint>;
+defm FCVTAS : NeonI_2VMisc_fp_to_int<"fcvtas", 0b0, 0b0, 0b11100,
+                                     int_aarch64_neon_fcvtas>;
+defm FCVTAU : NeonI_2VMisc_fp_to_int<"fcvtau", 0b0, 0b1, 0b11100,
+                                     int_aarch64_neon_fcvtau>;
+
+multiclass NeonI_2VMisc_int_to_fp<string asmop, bit Size, bit U,
+                                  bits<5> opcode, SDPatternOperator Neon_Op> {
+  defm _ : NeonI_2VMisc_SD_Conv<asmop, Size, U, opcode, v4f32, v4i32, v2f64,
+                                v2i64, v2f32, v2i32, Neon_Op>;
+}
+
+defm SCVTF : NeonI_2VMisc_int_to_fp<"scvtf", 0b0, 0b0, 0b11101, sint_to_fp>;
+defm UCVTF : NeonI_2VMisc_int_to_fp<"ucvtf", 0b0, 0b1, 0b11101, uint_to_fp>;
+
+multiclass NeonI_2VMisc_fp_to_fp<string asmop, bit Size, bit U,
+                                 bits<5> opcode, SDPatternOperator Neon_Op> {
+  defm _ : NeonI_2VMisc_SD_Conv<asmop, Size, U, opcode, v4f32, v4f32, v2f64,
+                                v2f64, v2f32, v2f32, Neon_Op>;
+}
+
+defm FRINTN : NeonI_2VMisc_fp_to_fp<"frintn", 0b0, 0b0, 0b11000,
+                                     int_aarch64_neon_frintn>;
+defm FRINTA : NeonI_2VMisc_fp_to_fp<"frinta", 0b0, 0b1, 0b11000, frnd>;
+defm FRINTP : NeonI_2VMisc_fp_to_fp<"frintp", 0b1, 0b0, 0b11000, fceil>;
+defm FRINTM : NeonI_2VMisc_fp_to_fp<"frintm", 0b0, 0b0, 0b11001, ffloor>;
+defm FRINTX : NeonI_2VMisc_fp_to_fp<"frintx", 0b0, 0b1, 0b11001, frint>;
+defm FRINTZ : NeonI_2VMisc_fp_to_fp<"frintz", 0b1, 0b0, 0b11001, ftrunc>;
+defm FRINTI : NeonI_2VMisc_fp_to_fp<"frinti", 0b1, 0b1, 0b11001, fnearbyint>;
+defm FRECPE : NeonI_2VMisc_fp_to_fp<"frecpe", 0b1, 0b0, 0b11101,
+                                    int_arm_neon_vrecpe>;
+defm FRSQRTE : NeonI_2VMisc_fp_to_fp<"frsqrte", 0b1, 0b1, 0b11101,
+                                     int_arm_neon_vrsqrte>;
+defm FSQRT : NeonI_2VMisc_fp_to_fp<"fsqrt", 0b1, 0b1, 0b11111,
+                                   int_aarch64_neon_fsqrt>;
+
+multiclass NeonI_2VMisc_S_Conv<string asmop, bit Size, bit U,
+                               bits<5> opcode, SDPatternOperator Neon_Op> {
+  def 4s : NeonI_2VMisc<0b1, U, {Size, 0b0}, opcode,
+                        (outs VPR128:$Rd), (ins VPR128:$Rn),
+                        asmop # "\t$Rd.4s, $Rn.4s",
+                        [(set (v4i32 VPR128:$Rd),
+                           (v4i32 (Neon_Op (v4i32 VPR128:$Rn))))],
+                        NoItinerary>;
+  
+  def 2s : NeonI_2VMisc<0b0, U, {Size, 0b0}, opcode,
+                        (outs VPR64:$Rd), (ins VPR64:$Rn),
+                        asmop # "\t$Rd.2s, $Rn.2s",
+                        [(set (v2i32 VPR64:$Rd),
+                           (v2i32 (Neon_Op (v2i32 VPR64:$Rn))))],
+                        NoItinerary>;
+}
+
+defm URECPE : NeonI_2VMisc_S_Conv<"urecpe", 0b1, 0b0, 0b11100,
+                                  int_arm_neon_vrecpe>;
+defm URSQRTE : NeonI_2VMisc_S_Conv<"ursqrte", 0b1, 0b1, 0b11100,
+                                   int_arm_neon_vrsqrte>;
+
 // Crypto Class
 class NeonI_Cryptoaes_2v<bits<2> size, bits<5> opcode,
                          string asmop, SDPatternOperator opnode>
@@ -6226,6 +8435,7 @@ class NeonI_Cryptoaes_2v<bits<2> size, bits<5> opcode,
                                        (v16i8 VPR128:$Rn))))],
                      NoItinerary>{
   let Constraints = "$src = $Rd";
+  let Predicates = [HasNEON, HasCrypto];
 }
 
 def AESE : NeonI_Cryptoaes_2v<0b00, 0b00100, "aese", int_arm_neon_aese>;
@@ -6253,6 +8463,7 @@ class NeonI_Cryptosha_vv<bits<2> size, bits<5> opcode,
                                        (v4i32 VPR128:$Rn))))],
                      NoItinerary> {
   let Constraints = "$src = $Rd";
+  let Predicates = [HasNEON, HasCrypto];
 }
 
 def SHA1SU1 : NeonI_Cryptosha_vv<0b00, 0b00001, "sha1su1",
@@ -6267,7 +8478,9 @@ class NeonI_Cryptosha_ss<bits<2> size, bits<5> opcode,
                      asmop # "\t$Rd, $Rn",
                      [(set (v1i32 FPR32:$Rd),
                         (v1i32 (opnode (v1i32 FPR32:$Rn))))],
-                     NoItinerary>;
+                     NoItinerary> {
+  let Predicates = [HasNEON, HasCrypto];
+}
 
 def SHA1H : NeonI_Cryptosha_ss<0b00, 0b00000, "sha1h", int_arm_neon_sha1h>;
 
@@ -6283,6 +8496,7 @@ class NeonI_Cryptosha3_vvv<bits<2> size, bits<3> opcode, string asmop,
                                          (v4i32 VPR128:$Rm))))],
                        NoItinerary> {
   let Constraints = "$src = $Rd";
+  let Predicates = [HasNEON, HasCrypto];
 }
 
 def SHA1SU0 : NeonI_Cryptosha3_vvv<0b00, 0b011, "sha1su0",
@@ -6302,6 +8516,7 @@ class NeonI_Cryptosha3_qqv<bits<2> size, bits<3> opcode, string asmop,
                                          (v4i32 VPR128:$Rm))))],
                        NoItinerary> {
   let Constraints = "$src = $Rd";
+  let Predicates = [HasNEON, HasCrypto];
 }
 
 def SHA256H : NeonI_Cryptosha3_qqv<0b00, 0b100, "sha256h",
@@ -6321,6 +8536,7 @@ class NeonI_Cryptosha3_qsv<bits<2> size, bits<3> opcode, string asmop,
                                          (v4i32 VPR128:$Rm))))],
                        NoItinerary> {
   let Constraints = "$src = $Rd";
+  let Predicates = [HasNEON, HasCrypto];
 }
 
 def SHA1C : NeonI_Cryptosha3_qsv<0b00, 0b000, "sha1c", int_aarch64_neon_sha1c>;

@@ -37,7 +37,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#define GET_INSTRINFO_CTOR
+#define GET_INSTRINFO_CTOR_DTOR
 #include "ARMGenInstrInfo.inc"
 
 using namespace llvm;
@@ -525,7 +525,7 @@ bool ARMBaseInstrInfo::isPredicable(MachineInstr *MI) const {
     MI->getParent()->getParent()->getInfo<ARMFunctionInfo>();
 
   if (AFI->isThumb2Function()) {
-    if (getSubtarget().hasV8Ops())
+    if (getSubtarget().restrictIT())
       return isV8EligibleForIT(MI);
   } else { // non-Thumb
     if ((MI->getDesc().TSFlags & ARMII::DomainMask) == ARMII::DomainNEON)
@@ -1325,10 +1325,8 @@ bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
       Opcode == ARM::t2LDRpci_pic ||
       Opcode == ARM::tLDRpci ||
       Opcode == ARM::tLDRpci_pic ||
-      Opcode == ARM::MOV_ga_dyn ||
       Opcode == ARM::MOV_ga_pcrel ||
       Opcode == ARM::MOV_ga_pcrel_ldr ||
-      Opcode == ARM::t2MOV_ga_dyn ||
       Opcode == ARM::t2MOV_ga_pcrel) {
     if (MI1->getOpcode() != Opcode)
       return false;
@@ -1340,10 +1338,8 @@ bool ARMBaseInstrInfo::produceSameValue(const MachineInstr *MI0,
     if (MO0.getOffset() != MO1.getOffset())
       return false;
 
-    if (Opcode == ARM::MOV_ga_dyn ||
-        Opcode == ARM::MOV_ga_pcrel ||
+    if (Opcode == ARM::MOV_ga_pcrel ||
         Opcode == ARM::MOV_ga_pcrel_ldr ||
-        Opcode == ARM::t2MOV_ga_dyn ||
         Opcode == ARM::t2MOV_ga_pcrel)
       // Ignore the PC labels.
       return MO0.getGlobal() == MO1.getGlobal();
@@ -1934,7 +1930,8 @@ bool llvm::tryFoldSPUpdateIntoPushPop(MachineFunction &MF,
       return false;
 
     // Mark the unimportant registers as <def,dead> in the POP.
-    RegList.push_back(MachineOperand::CreateReg(CurReg, true, false, true));
+    RegList.push_back(MachineOperand::CreateReg(CurReg, true, false, false,
+                                                true));
   }
 
   if (RegsNeeded > 0)

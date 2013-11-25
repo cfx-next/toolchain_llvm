@@ -32,6 +32,16 @@ def mem16_ea : Operand<i32> {
 }
 
 //
+// I-type instruction format
+//
+// this is only used by bimm. the actual assembly value is a 12 bit signed
+// number
+//
+class FI16_ins<bits<5> op, string asmstr, InstrItinClass itin>:
+  FI16<op, (outs), (ins brtarget:$imm16),
+            !strconcat(asmstr, "\t$imm16 # 16 bit inst"), [], itin>;
+
+//
 //
 // I8 instruction format
 //
@@ -41,7 +51,10 @@ class FI816_ins_base<bits<3> _func, string asmstr,
   FI816<_func, (outs), (ins simm16:$imm), !strconcat(asmstr, asmstr2),
         [], itin>;
 
-
+class FI816_ins<bits<3> _func, string asmstr,
+                InstrItinClass itin>:
+  FI816_ins_base<_func, asmstr, "\t$imm  # 16 bit inst", itin>;
+ 
 class FI816_SP_ins<bits<3> _func, string asmstr,
                    InstrItinClass itin>:
   FI816_ins_base<_func, asmstr, "\t$$sp, $imm # 16 bit inst", itin>;
@@ -577,6 +590,14 @@ def BeqzRxImm16: FRI16_B_ins<0b00100, "beqz", IIAlu>, cbranch16;
 //
 def BeqzRxImmX16: FEXT_RI16_B_ins<0b00100, "beqz", IIAlu>, cbranch16;
 
+//
+// Format: B offset MIPS16e
+// Purpose: Unconditional Branch (Extended)
+// To do an unconditional PC-relative branch.
+//
+
+def Bimm16: FI16_ins<0b00010, "b", IIAlu>, branch16;
+
 // Format: B offset MIPS16e
 // Purpose: Unconditional Branch
 // To do an unconditional PC-relative branch.
@@ -609,6 +630,10 @@ def Break16: FRRBreakNull16_ins<"break 0", NoItinerary>;
 // Purpose: Branch on T Equal to Zero (Extended)
 // To test special register T then do a PC-relative conditional branch.
 //
+def Bteqz16: FI816_ins<0b000, "bteqz", IIAlu>, cbranch16 {
+  let Uses = [T8];
+}
+
 def BteqzX16: FEXT_I816_ins<0b000, "bteqz", IIAlu>, cbranch16 {
   let Uses = [T8];
 }
@@ -632,6 +657,11 @@ def BteqzT8SltiuX16: FEXT_T8I8I16_ins<"bteqz", "sltiu">,
 // Purpose: Branch on T Not Equal to Zero (Extended)
 // To test special register T then do a PC-relative conditional branch.
 //
+
+def Btnez16: FI816_ins<0b001, "btnez", IIAlu>, cbranch16 {
+  let Uses = [T8];
+}
+
 def BtnezX16: FEXT_I816_ins<0b001, "btnez", IIAlu> ,cbranch16 {
   let Uses = [T8];
 }
@@ -704,6 +734,7 @@ def DivuRxRy16: FRR16_div_ins<0b11011, "divu", IIAlu> {
 def Jal16 : FJAL16_ins<0b0, "jal", IIAlu> {
   let hasDelaySlot = 0;  // not true, but we add the nop for now
   let isCall=1;
+  let Defs = [RA];
 }
 
 //
@@ -1409,7 +1440,7 @@ def: Mips16Pat
 
 def: Mips16Pat
   <(brcond (i32 (seteq CPU16Regs:$rx, 0)), bb:$targ16),
-   (BeqzRxImmX16 CPU16Regs:$rx, bb:$targ16)
+   (BeqzRxImm16 CPU16Regs:$rx, bb:$targ16)
   >;
 
 //
@@ -1471,7 +1502,7 @@ def: Mips16Pat
 
 def: Mips16Pat
   <(brcond (i32 (setne CPU16Regs:$rx, 0)), bb:$targ16),
-   (BnezRxImmX16 CPU16Regs:$rx, bb:$targ16)
+   (BnezRxImm16 CPU16Regs:$rx, bb:$targ16)
   >;
 
 //
@@ -1479,7 +1510,7 @@ def: Mips16Pat
 //
 def: Mips16Pat
   <(brcond CPU16Regs:$rx, bb:$targ16),
-   (BnezRxImmX16 CPU16Regs:$rx, bb:$targ16)
+   (BnezRxImm16 CPU16Regs:$rx, bb:$targ16)
   >;
 
 //
@@ -1509,7 +1540,7 @@ def: Mips16Pat
 //   (BtnezT8SltuX16 CPU16Regs:$rx, CPU16Regs:$ry,  bb:$imm16)
 //  >;
 
-def: UncondBranch16_pat<br, BimmX16>;
+def: UncondBranch16_pat<br, Bimm16>;
 
 // Small immediates
 def: Mips16Pat<(i32 immSExt16:$in),

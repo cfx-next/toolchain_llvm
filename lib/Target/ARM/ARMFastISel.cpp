@@ -685,19 +685,20 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, MVT VT) {
   if (Subtarget->useMovt() &&
       Subtarget->isTargetDarwin() == (RelocM != Reloc::Static)) {
     unsigned Opc;
+    unsigned char TF = 0;
+    if (Subtarget->isTargetDarwin() && RelocM != Reloc::Static)
+      TF = ARMII::MO_NONLAZY;
+
     switch (RelocM) {
     case Reloc::PIC_:
       Opc = isThumb2 ? ARM::t2MOV_ga_pcrel : ARM::MOV_ga_pcrel;
-      break;
-    case Reloc::DynamicNoPIC:
-      Opc = isThumb2 ? ARM::t2MOV_ga_dyn : ARM::MOV_ga_dyn;
       break;
     default:
       Opc = isThumb2 ? ARM::t2MOVi32imm : ARM::MOVi32imm;
       break;
     }
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(Opc),
-                            DestReg).addGlobalAddress(GV));
+                            DestReg).addGlobalAddress(GV, 0, TF));
   } else {
     // MachineConstantPool wants an explicit alignment.
     unsigned Align = TD.getPrefTypeAlignment(GV->getType());
@@ -900,13 +901,8 @@ bool ARMFastISel::ARMComputeAddress(const Value *Obj, Address &Addr) {
               TmpOffset += CI->getSExtValue() * S;
               break;
             }
-            if (isa<AddOperator>(Op) &&
-                (!isa<Instruction>(Op) ||
-                 FuncInfo.MBBMap[cast<Instruction>(Op)->getParent()]
-                 == FuncInfo.MBB) &&
-                isa<ConstantInt>(cast<AddOperator>(Op)->getOperand(1))) {
-              // An add (in the same block) with a constant operand. Fold the
-              // constant.
+            if (canFoldAddIntoGEP(U, Op)) {
+              // A compatible add with a constant operand. Fold the constant.
               ConstantInt *CI =
               cast<ConstantInt>(cast<AddOperator>(Op)->getOperand(1));
               TmpOffset += CI->getSExtValue() * S;

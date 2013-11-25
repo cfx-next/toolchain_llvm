@@ -15,7 +15,7 @@
 #ifndef LLVM_TRANSFORMS_SCALAR_H
 #define LLVM_TRANSFORMS_SCALAR_H
 
-#include <string>
+#include "llvm/ADT/StringRef.h"
 
 namespace llvm {
 
@@ -142,6 +142,12 @@ Pass *createLoopInstSimplifyPass();
 //
 Pass *createLoopUnrollPass(int Threshold = -1, int Count = -1,
                            int AllowPartial = -1, int Runtime = -1);
+
+//===----------------------------------------------------------------------===//
+//
+// LoopReroll - This pass is a simple loop rerolling pass.
+//
+Pass *createLoopRerollPass();
 
 //===----------------------------------------------------------------------===//
 //
@@ -362,7 +368,13 @@ FunctionPass *createPartiallyInlineLibCallsPass();
 // SampleProfilePass - Loads sample profile data from disk and generates
 // IR metadata to reflect the profile.
 FunctionPass *createSampleProfileLoaderPass();
-FunctionPass *createSampleProfileLoaderPass(std::string Name);
+FunctionPass *createSampleProfileLoaderPass(StringRef Name);
+
+//===----------------------------------------------------------------------===//
+//
+// ScalarizerPass - Converts vector operations into scalar operations
+//
+FunctionPass *createScalarizerPass();
 
 } // End llvm namespace
 

@@ -263,6 +263,15 @@ void X86Subtarget::AutoDetectSubtargetFeatures() {
       ToggleFeature(X86::FeatureSlowBTMem);
     }
 
+    // Determine if SHLD/SHRD instructions have higher latency then the
+    // equivalent series of shifts/or instructions. 
+    // FIXME: Add Intel's processors that have SHLD instructions with very
+    // poor latency. 
+    if (IsAMD) {
+      IsSHLDSlow = true;
+      ToggleFeature(X86::FeatureSlowSHLD);
+    }
+
     // If it's an Intel chip since Nehalem and not an Atom chip, unaligned
     // memory access is fast. We hard code model numbers here because they
     // aren't strictly increasing for Intel chips it seems.
@@ -276,7 +285,12 @@ void X86Subtarget::AutoDetectSubtargetFeatures() {
          (Family == 6 && Model == 0x2F) || // Westmere: Westmere-EX
          (Family == 6 && Model == 0x2A) || // SandyBridge
          (Family == 6 && Model == 0x2D) || // SandyBridge: SandyBridge-E*
-         (Family == 6 && Model == 0x3A))) {// IvyBridge
+         (Family == 6 && Model == 0x3A) || // IvyBridge
+         (Family == 6 && Model == 0x3E) || // IvyBridge EP
+         (Family == 6 && Model == 0x3C) || // Haswell
+         (Family == 6 && Model == 0x3F) || // ...
+         (Family == 6 && Model == 0x45) || // ...
+         (Family == 6 && Model == 0x46))) { // ...
       IsUAMemFast = true;
       ToggleFeature(X86::FeatureFastUAMem);
     }
@@ -514,6 +528,7 @@ void X86Subtarget::initializeEnvironment() {
   HasPRFCHW = false;
   HasRDSEED = false;
   IsBTMemSlow = false;
+  IsSHLDSlow = false;
   IsUAMemFast = false;
   HasVectorUAMem = false;
   HasCmpxchg16b = false;

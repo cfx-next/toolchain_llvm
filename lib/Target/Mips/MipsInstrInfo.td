@@ -179,7 +179,7 @@ def RelocPIC    :     Predicate<"TM.getRelocationModel() == Reloc::PIC_">,
 def NoNaNsFPMath :    Predicate<"TM.Options.NoNaNsFPMath">,
                       AssemblerPredicate<"FeatureMips32">;
 def HasStdEnc :       Predicate<"Subtarget.hasStandardEncoding()">,
-                      AssemblerPredicate<"!FeatureMips16,!FeatureMicroMips">;
+                      AssemblerPredicate<"!FeatureMips16">;
 def NotDSP :          Predicate<"!Subtarget.hasDSP()">;
 def InMicroMips    :  Predicate<"Subtarget.inMicroMipsMode()">,
                       AssemblerPredicate<"FeatureMicroMips">;
@@ -663,7 +663,7 @@ class TEQ_FT<string opstr, RegisterOperand RO> :
 
 class TEQI_FT<string opstr, RegisterOperand RO> :
   InstSE<(outs), (ins RO:$rs, uimm16:$imm16),
-         !strconcat(opstr, "\t$rs, $imm16"), [], NoItinerary, FrmOther>;
+         !strconcat(opstr, "\t$rs, $imm16"), [], NoItinerary, FrmOther, opstr>;
 // Mul, Div
 class Mult<string opstr, InstrItinClass itin, RegisterOperand RO,
            list<Register> DefRegs> :
@@ -958,10 +958,12 @@ def SH  : Store<"sh", GPR32Opnd, truncstorei16, IIStore>, MMRel, LW_FM<0x29>;
 def SW  : Store<"sw", GPR32Opnd, store, IIStore>, MMRel, LW_FM<0x2b>;
 
 /// load/store left/right
+let Predicates = [NotInMicroMips] in {
 def LWL : LoadLeftRight<"lwl", MipsLWL, GPR32Opnd, IILoad>, LW_FM<0x22>;
 def LWR : LoadLeftRight<"lwr", MipsLWR, GPR32Opnd, IILoad>, LW_FM<0x26>;
 def SWL : StoreLeftRight<"swl", MipsSWL, GPR32Opnd, IIStore>, LW_FM<0x2a>;
 def SWR : StoreLeftRight<"swr", MipsSWR, GPR32Opnd, IIStore>, LW_FM<0x2e>;
+}
 
 def SYNC : SYNC_FT, SYNC_FM;
 def TEQ : MMRel, TEQ_FT<"teq", GPR32Opnd>, TEQ_FM<0x34>;
@@ -971,12 +973,12 @@ def TLT : MMRel, TEQ_FT<"tlt", GPR32Opnd>, TEQ_FM<0x32>;
 def TLTU : MMRel, TEQ_FT<"tltu", GPR32Opnd>, TEQ_FM<0x33>;
 def TNE : MMRel, TEQ_FT<"tne", GPR32Opnd>, TEQ_FM<0x36>;
 
-def TEQI : TEQI_FT<"teqi", GPR32Opnd>, TEQI_FM<0xc>;
-def TGEI : TEQI_FT<"tgei", GPR32Opnd>, TEQI_FM<0x8>;
-def TGEIU : TEQI_FT<"tgeiu", GPR32Opnd>, TEQI_FM<0x9>;
-def TLTI : TEQI_FT<"tlti", GPR32Opnd>, TEQI_FM<0xa>;
-def TTLTIU : TEQI_FT<"tltiu", GPR32Opnd>, TEQI_FM<0xb>;
-def TNEI : TEQI_FT<"tnei", GPR32Opnd>, TEQI_FM<0xe>;
+def TEQI : MMRel, TEQI_FT<"teqi", GPR32Opnd>, TEQI_FM<0xc>;
+def TGEI : MMRel, TEQI_FT<"tgei", GPR32Opnd>, TEQI_FM<0x8>;
+def TGEIU : MMRel, TEQI_FT<"tgeiu", GPR32Opnd>, TEQI_FM<0x9>;
+def TLTI : MMRel, TEQI_FT<"tlti", GPR32Opnd>, TEQI_FM<0xa>;
+def TTLTIU : MMRel, TEQI_FT<"tltiu", GPR32Opnd>, TEQI_FM<0xb>;
+def TNEI : MMRel, TEQI_FT<"tnei", GPR32Opnd>, TEQI_FM<0xe>;
 
 def BREAK : BRK_FT<"break">, BRK_FM<0xd>;
 def SYSCALL : SYS_FT<"syscall">, SYS_FM<0xc>;
@@ -1049,8 +1051,10 @@ def MULT  : MMRel, Mult<"mult", IIImult, GPR32Opnd, [HI0, LO0]>,
             MULT_FM<0, 0x18>;
 def MULTu : MMRel, Mult<"multu", IIImult, GPR32Opnd, [HI0, LO0]>,
             MULT_FM<0, 0x19>;
-def SDIV  : Div<"div", IIIdiv, GPR32Opnd, [HI0, LO0]>, MULT_FM<0, 0x1a>;
-def UDIV  : Div<"divu", IIIdiv, GPR32Opnd, [HI0, LO0]>, MULT_FM<0, 0x1b>;
+def SDIV  : MMRel, Div<"div", IIIdiv, GPR32Opnd, [HI0, LO0]>,
+            MULT_FM<0, 0x1a>;
+def UDIV  : MMRel, Div<"divu", IIIdiv, GPR32Opnd, [HI0, LO0]>,
+            MULT_FM<0, 0x1b>;
 
 def MTHI : MMRel, MoveToLOHI<"mthi", GPR32Opnd, [HI0]>, MTLO_FM<0x11>;
 def MTLO : MMRel, MoveToLOHI<"mtlo", GPR32Opnd, [LO0]>, MTLO_FM<0x13>;

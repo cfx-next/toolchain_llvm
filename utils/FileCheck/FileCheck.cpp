@@ -785,30 +785,32 @@ static StringRef FindFirstCandidateMatch(StringRef &Buffer,
     // We only want to find the first match to avoid skipping some.
     if (PrefixLoc > FirstLoc)
       continue;
+    // If one matching check-prefix is a prefix of another, choose the
+    // longer one.
+    if (PrefixLoc == FirstLoc && Prefix.size() < FirstPrefix.size())
+      continue;
 
     StringRef Rest = Buffer.drop_front(PrefixLoc);
     // Make sure we have actually found the prefix, and not a word containing
     // it. This should also prevent matching the wrong prefix when one is a
     // substring of another.
     if (PrefixLoc != 0 && IsPartOfWord(Buffer[PrefixLoc - 1]))
-      continue;
-
-    Check::CheckType Ty = FindCheckType(Rest, Prefix);
-    if (Ty == Check::CheckNone)
-      continue;
+      FirstTy = Check::CheckNone;
+    else
+      FirstTy = FindCheckType(Rest, Prefix);
 
     FirstLoc = PrefixLoc;
-    FirstTy = Ty;
     FirstPrefix = Prefix;
   }
 
-  if (FirstPrefix.empty()) {
+  // If the first prefix is invalid, we should continue the search after it.
+  if (FirstTy == Check::CheckNone) {
     CheckLoc = SearchLoc;
-  } else {
-    CheckTy = FirstTy;
-    CheckLoc = FirstLoc;
+    return "";
   }
 
+  CheckTy = FirstTy;
+  CheckLoc = FirstLoc;
   return FirstPrefix;
 }
 

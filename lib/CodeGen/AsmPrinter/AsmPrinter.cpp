@@ -949,6 +949,11 @@ bool AsmPrinter::doFinalization(Module &M) {
       MCSymbol *Name = getSymbol(I);
 
       const GlobalValue *GV = I->getAliasedGlobal();
+      if (GV->isDeclaration()) {
+        report_fatal_error(Name->getName() +
+                           ": Target doesn't support aliases to declarations");
+      }
+
       MCSymbol *Target = getSymbol(GV);
 
       if (I->hasExternalLinkage() || !MAI->getWeakRefDirective())
@@ -1447,8 +1452,8 @@ void AsmPrinter::EmitLabelOffsetDifference(const MCSymbol *Hi, uint64_t Offset,
 /// where the size in bytes of the directive is specified by Size and Label
 /// specifies the label.  This implicitly uses .set if it is available.
 void AsmPrinter::EmitLabelPlusOffset(const MCSymbol *Label, uint64_t Offset,
-                                      unsigned Size, bool IsSectionRelative)
-  const {
+                                     unsigned Size,
+                                     bool IsSectionRelative) const {
   if (MAI->needsDwarfSectionOffsetDirective() && IsSectionRelative) {
     OutStreamer.EmitCOFFSecRel32(Label);
     return;
@@ -1457,13 +1462,11 @@ void AsmPrinter::EmitLabelPlusOffset(const MCSymbol *Label, uint64_t Offset,
   // Emit Label+Offset (or just Label if Offset is zero)
   const MCExpr *Expr = MCSymbolRefExpr::Create(Label, OutContext);
   if (Offset)
-    Expr = MCBinaryExpr::CreateAdd(Expr,
-                                   MCConstantExpr::Create(Offset, OutContext),
-                                   OutContext);
+    Expr = MCBinaryExpr::CreateAdd(
+        Expr, MCConstantExpr::Create(Offset, OutContext), OutContext);
 
   OutStreamer.EmitValue(Expr, Size);
 }
-
 
 //===----------------------------------------------------------------------===//
 

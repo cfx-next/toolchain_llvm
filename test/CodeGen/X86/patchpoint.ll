@@ -1,4 +1,4 @@
-; RUN: llc < %s -mtriple=x86_64-apple-darwin | FileCheck %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -mcpu=corei7 -disable-fp-elim | FileCheck %s
 
 ; Trivial patchpoint codegen
 ;
@@ -24,9 +24,9 @@ entry:
 ; as a leaf function.
 ;
 ; CHECK-LABEL: caller_meta_leaf
-; CHECK: subq $24, %rsp
+; CHECK: subq $32, %rsp
 ; CHECK: Ltmp
-; CHECK: addq $24, %rsp
+; CHECK: addq $32, %rsp
 ; CHECK: ret
 define void @caller_meta_leaf() {
 entry:
@@ -77,6 +77,22 @@ entry:
   tail call void (i32, i32, ...)* @llvm.experimental.stackmap(i32 17, i32 5, i64 %arg, i64 %tmp10, i64 %tmp86)
   tail call void (i32, i32, i8*, i32, ...)* @llvm.experimental.patchpoint.void(i32 18, i32 30, i8* null, i32 3, i64 %arg, i64 %tmp10, i64 %tmp86)
   ret i64 10
+}
+
+; Test small patchpoints that don't emit calls.
+define void @small_patchpoint_codegen(i64 %p1, i64 %p2, i64 %p3, i64 %p4) {
+entry:
+; CHECK-LABEL: small_patchpoint_codegen:
+; CHECK:      Ltmp
+; CHECK:      nop
+; CHECK-NEXT: nop
+; CHECK-NEXT: nop
+; CHECK-NEXT: nop
+; CHECK-NEXT: nop
+; CHECK-NEXT: popq
+; CHECK-NEXT: ret
+  %result = tail call i64 (i32, i32, i8*, i32, ...)* @llvm.experimental.patchpoint.i64(i32 5, i32 5, i8* null, i32 2, i64 %p1, i64 %p2)
+  ret void
 }
 
 declare void @llvm.experimental.stackmap(i32, i32, ...)

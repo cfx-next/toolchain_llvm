@@ -1,4 +1,4 @@
-; RUN: llc < %s -mtriple=x86_64-apple-darwin | FileCheck %s
+; RUN: llc < %s -mtriple=x86_64-apple-darwin -disable-fp-elim | FileCheck %s
 ;
 ; Note: Print verbose stackmaps using -debug-only=stackmaps.
 
@@ -9,7 +9,7 @@
 ; CHECK-NEXT:   .long   1
 ; CHECK-NEXT:   .quad   4294967296
 ; Num Callsites
-; CHECK-NEXT:   .long   8
+; CHECK-NEXT:   .long   12
 
 ; Constant arguments
 ;
@@ -19,22 +19,22 @@
 ; CHECK-NEXT:   .short  4
 ; SmallConstant
 ; CHECK-NEXT:   .byte   4
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .long   65535
 ; SmallConstant
 ; CHECK-NEXT:   .byte   4
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .long   65536
 ; SmallConstant
 ; CHECK-NEXT:   .byte   4
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  0
-; CHECK-NEXT:   .long   4294967295
+; CHECK-NEXT:   .long   -1
 ; LargeConstant at index 0
 ; CHECK-NEXT:   .byte   5
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .long   0
 
@@ -52,11 +52,11 @@ entry:
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .short  2
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long  0
 define void @osrinline(i64 %a, i64 %b) {
@@ -77,11 +77,11 @@ entry:
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .short  2
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long  0
 define void @osrcold(i64 %a, i64 %b) {
@@ -137,11 +137,11 @@ entry:
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .short  2
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 define void @jsVoidCall(i64 %dummy1, i64* %obj, i64 %arg, i64 %l1, i64 %l2) {
@@ -160,11 +160,11 @@ entry:
 ; CHECK-NEXT:   .short  0
 ; CHECK-NEXT:   .short  2
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 ; CHECK-NEXT:   .byte   1
-; CHECK-NEXT:   .byte   0
+; CHECK-NEXT:   .byte   8
 ; CHECK-NEXT:   .short  {{[0-9]+}}
 ; CHECK-NEXT:   .long   0
 define i64 @jsIntCall(i64 %dummy1, i64* %obj, i64 %arg, i64 %l1, i64 %l2) {
@@ -182,21 +182,126 @@ entry:
 ; CHECK:      .long 11
 ; CHECK-NEXT: .long L{{.*}}-_spilledValue
 ; CHECK-NEXT: .short 0
-; CHECK-NEXT: .short 10
+; CHECK-NEXT: .short 17
 ;
-; Check that at least one is a spilled entry (Indirect).
-; CHECK: .byte 3
-; CHECK: .byte 0
+; Check that at least one is a spilled entry from RBP.
+; Location: Indirect RBP + ...
+; CHECK:      .byte 3
+; CHECK-NEXT: .byte 8
+; CHECK-NEXT: .short 6
 define void @spilledValue(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4, i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9, i64 %l10, i64 %l11, i64 %l12, i64 %l13, i64 %l14, i64 %l15, i64 %l16) {
 entry:
-  %resolveCall = inttoptr i64 -559038737 to i8*
-  call void (i32, i32, i8*, i32, ...)* @llvm.experimental.patchpoint.void(i32 11, i32 15, i8* %resolveCall, i32 5, i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4, i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9)
+  call void (i32, i32, i8*, i32, ...)* @llvm.experimental.patchpoint.void(i32 11, i32 15, i8* null, i32 5, i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4, i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9, i64 %l10, i64 %l11, i64 %l12, i64 %l13, i64 %l14, i64 %l15, i64 %l16)
+  ret void
+}
 
-; FIXME: The Spiller needs to be able to fold all rematted loads! This
-; can be seen by adding %l15 to the stackmap.
-; <rdar:/15202984> [JS] Ran out of registers during register allocation
-;  %resolveCall = inttoptr i64 -559038737 to i8*
-;  call void (i32, i32, i8*, i32, ...)* @llvm.experimental.patchpoint.void(i32 12, i32 15, i8* %resolveCall, i32 5, i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4, i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9, i64 %l10, i64 %l11, i64 %l12, i64 %l13, i64 %l14, i64 %l15, i64 %l16)
+; Spilled stack map values.
+;
+; Verify 17 stack map entries.
+;
+; CHECK:       .long 12
+; CHECK-LABEL: .long L{{.*}}-_spilledStackMapValue
+; CHECK-NEXT:  .short 0
+; CHECK-NEXT:  .short 17
+;
+; Check that at least one is a spilled entry from RBP.
+; Location: Indirect RBP + ...
+; CHECK:      .byte 3
+; CHECK-NEXT: .byte 8
+; CHECK-NEXT: .short 6
+define webkit_jscc void @spilledStackMapValue(i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9, i64 %l10, i64 %l11, i64 %l12, i64 %l13, i64 %l14, i64 %l15, i64 %l16) {
+entry:
+  call void (i32, i32, ...)* @llvm.experimental.stackmap(i32 12, i32 15, i64 %l0, i64 %l1, i64 %l2, i64 %l3, i64 %l4, i64 %l5, i64 %l6, i64 %l7, i64 %l8, i64 %l9, i64 %l10, i64 %l11, i64 %l12, i64 %l13, i64 %l14, i64 %l15, i64 %l16)
+  ret void
+}
+
+; Spill a subregister stackmap operand.
+;
+; CHECK:       .long 13
+; CHECK-LABEL: .long L{{.*}}-_spillSubReg
+; CHECK-NEXT:  .short 0
+; 4 locations
+; CHECK-NEXT:  .short 1
+;
+; Check that the subregister operand is a 4-byte spill.
+; Location: Indirect, 4-byte, RBP + ...
+; CHECK:      .byte 3
+; CHECK-NEXT: .byte 4
+; CHECK-NEXT: .short 6
+define void @spillSubReg(i64 %arg) #0 {
+bb:
+  br i1 undef, label %bb1, label %bb2
+
+bb1:
+  unreachable
+
+bb2:
+  %tmp = load i64* inttoptr (i64 140685446136880 to i64*)
+  br i1 undef, label %bb16, label %bb17
+
+bb16:
+  unreachable
+
+bb17:
+  %tmp32 = trunc i64 %tmp to i32
+  br i1 undef, label %bb60, label %bb61
+
+bb60:
+  tail call void asm sideeffect "nop", "~{ax},~{bx},~{cx},~{dx},~{bp},~{si},~{di},~{r8},~{r9},~{r10},~{r11},~{r12},~{r13},~{r14},~{r15}"() nounwind
+  tail call void (i32, i32, ...)* @llvm.experimental.stackmap(i32 13, i32 5, i32 %tmp32)
+  unreachable
+
+bb61:
+  unreachable
+}
+
+; Map a single byte subregister. There is no DWARF register number, so
+; we expect the register to be encoded with the proper size and spill offset. We don't know which
+;
+; CHECK:       .long 14
+; CHECK-LABEL: .long L{{.*}}-_subRegOffset
+; CHECK-NEXT:  .short 0
+; 2 locations
+; CHECK-NEXT:  .short 2
+;
+; Check that the subregister operands are 1-byte spills.
+; Location 0: Register, 4-byte, AL
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .short 0
+; CHECK-NEXT: .long 0
+;
+; Location 1: Register, 4-byte, BL
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .byte 1
+; CHECK-NEXT: .short 3
+; CHECK-NEXT: .long 0
+define void @subRegOffset(i16 %arg) {
+  %v = mul i16 %arg, 5
+  %a0 = trunc i16 %v to i8
+  tail call void asm sideeffect "nop", "~{bx}"() nounwind
+  %arghi = lshr i16 %v, 8
+  %a1 = trunc i16 %arghi to i8
+  tail call void asm sideeffect "nop", "~{cx},~{dx},~{bp},~{si},~{di},~{r8},~{r9},~{r10},~{r11},~{r12},~{r13},~{r14},~{r15}"() nounwind
+  tail call void (i32, i32, ...)* @llvm.experimental.stackmap(i32 14, i32 5, i8 %a0, i8 %a1)
+  ret void
+}
+
+; Map a constant value.
+;
+; CHECK:       .long 15
+; CHECK-LABEL: .long L{{.*}}-_liveConstant
+; CHECK-NEXT:  .short 0
+; 1 location
+; CHECK-NEXT:  .short 1
+; Loc 0: SmallConstant
+; CHECK-NEXT:   .byte   4
+; CHECK-NEXT:   .byte   8
+; CHECK-NEXT:   .short  0
+; CHECK-NEXT:   .long   33
+
+define void @liveConstant() {
+  tail call void (i32, i32, ...)* @llvm.experimental.stackmap(i32 15, i32 5, i32 33)
   ret void
 }
 
