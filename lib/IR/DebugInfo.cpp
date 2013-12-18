@@ -461,14 +461,13 @@ bool DIType::Verify() const {
   // DIType is abstract, it should be a BasicType, a DerivedType or
   // a CompositeType.
   if (isBasicType())
-    DIBasicType(DbgNode).Verify();
+    return DIBasicType(DbgNode).Verify();
   else if (isCompositeType())
-    DICompositeType(DbgNode).Verify();
+    return DICompositeType(DbgNode).Verify();
   else if (isDerivedType())
-    DIDerivedType(DbgNode).Verify();
+    return DIDerivedType(DbgNode).Verify();
   else
     return false;
-  return true;
 }
 
 /// Verify - Verify that a basic type descriptor is well formed.
@@ -1477,4 +1476,12 @@ bool llvm::StripDebugInfo(Module &M) {
       }
 
   return Changed;
+}
+
+/// Return Debug Info Metadata Version by checking module flags.
+unsigned llvm::getDebugMetadataVersionFromModule(const Module &M) {
+  Value *Val = M.getModuleFlag("Debug Info Version");
+  if (!Val)
+    return 0;
+  return cast<ConstantInt>(Val)->getZExtValue();
 }

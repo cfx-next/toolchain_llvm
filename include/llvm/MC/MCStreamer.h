@@ -93,6 +93,7 @@ public:
   virtual void emitAttribute(unsigned Attribute, unsigned Value) = 0;
   virtual void emitTextAttribute(unsigned Attribute, StringRef String) = 0;
   virtual void emitFPU(unsigned FPU) = 0;
+  virtual void emitArch(unsigned Arch) = 0;
   virtual void finishAttributeSection() = 0;
 };
 
@@ -334,6 +335,8 @@ public:
   /// @param Symbol - The symbol to emit. A given symbol should only be
   /// emitted as a label once, and symbols emitted as a label should never be
   /// used in an assignment.
+  // FIXME: These emission are non-const because we mutate the symbol to
+  // add the section we're emitting it to later.
   virtual void EmitLabel(MCSymbol *Symbol);
 
   /// EmitTextLabel - Emit a label in text segment.

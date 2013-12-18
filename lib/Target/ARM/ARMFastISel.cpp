@@ -679,14 +679,12 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, MVT VT) {
   if (!Subtarget->isTargetDarwin() && IsThreadLocal) return 0;
 
   // Use movw+movt when possible, it avoids constant pool entries.
-  // Darwin targets don't support movt with Reloc::Static, see
-  // ARMTargetLowering::LowerGlobalAddressDarwin.  Other targets only support
-  // static movt relocations.
+  // Non-darwin targets only support static movt relocations in FastISel.
   if (Subtarget->useMovt() &&
-      Subtarget->isTargetDarwin() == (RelocM != Reloc::Static)) {
+      (Subtarget->isTargetDarwin() || RelocM == Reloc::Static)) {
     unsigned Opc;
     unsigned char TF = 0;
-    if (Subtarget->isTargetDarwin() && RelocM != Reloc::Static)
+    if (Subtarget->isTargetDarwin())
       TF = ARMII::MO_NONLAZY;
 
     switch (RelocM) {
@@ -803,9 +801,11 @@ unsigned ARMFastISel::TargetMaterializeAlloca(const AllocaInst *AI) {
   // This will get lowered later into the correct offsets and registers
   // via rewriteXFrameIndex.
   if (SI != FuncInfo.StaticAllocaMap.end()) {
+    unsigned Opc = isThumb2 ? ARM::t2ADDri : ARM::ADDri;
     const TargetRegisterClass* RC = TLI.getRegClassFor(VT);
     unsigned ResultReg = createResultReg(RC);
-    unsigned Opc = isThumb2 ? ARM::t2ADDri : ARM::ADDri;
+    ResultReg = constrainOperandRegClass(TII.get(Opc), ResultReg, 0);
+
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                             TII.get(Opc), ResultReg)
                             .addFrameIndex(SI->second)

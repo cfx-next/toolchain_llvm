@@ -30,14 +30,41 @@ SUB_CPPFLAGS := ${CPP.BaseFlags}
 SUB_CFLAGS   := ${CPP.BaseFlags} ${C.Flags}
 SUB_CXXFLAGS := ${CPP.BaseFlags} ${CXX.Flags}
 
+# Override LIBS with TARGET's LIBS for cross compilation.
+# FIXME: Host's llvm-config is not generated. It's for target's.
+ifneq ($(TARGET_LIBS), )
+  LLVM_SYSTEM_LIBS := $(TARGET_LIBS)
+else
+  LLVM_SYSTEM_LIBS := $(LIBS)
+endif
+
 # This is blank for now.  We need to be careful about adding stuff here:
 # LDFLAGS tend not to be portable, and we don't currently require the
 # user to use libtool when linking against LLVM.
 SUB_LDFLAGS :=
 
-$(ObjDir)/BuildVariables.inc: $(BUILDVARIABLES_SRCPATH) Makefile Makefile.buildvars $(ObjDir)/.dir
-	$(Echo) "Making llvm-config $@ file."
-	$(MAKE) -f Makefile.buildvars CROSS_DEPTH=$(CROSS_DEPTH)
+$(ObjDir)/BuildVariables.inc: $(BUILDVARIABLES_SRCPATH) Makefile $(ObjDir)/.dir
+	$(Echo) "Building llvm-config BuildVariables.inc file."
+	$(Verb) $(ECHO) 's/@LLVM_SRC_ROOT@/$(subst /,\/,$(LLVM_SRC_ROOT))/' \
+	  > temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_OBJ_ROOT@/$(subst /,\/,$(LLVM_OBJ_ROOT))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_CPPFLAGS@/$(subst /,\/,$(SUB_CPPFLAGS))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_CFLAGS@/$(subst /,\/,$(SUB_CFLAGS))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_CXXFLAGS@/$(subst /,\/,$(SUB_CXXFLAGS))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_LDFLAGS@/$(subst /,\/,$(SUB_LDFLAGS))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_BUILDMODE@/$(subst /,\/,$(BuildMode))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_SYSTEM_LIBS@/$(subst /,\/,$(LLVM_SYSTEM_LIBS))/' \
+	  >> temp.sed
+	$(Verb) $(ECHO) 's/@LLVM_TARGETS_BUILT@/$(subst /,\/,$(TARGETS_TO_BUILD))/' \
+	  >> temp.sed
+	$(Verb) $(SED) -f temp.sed < $< > $@
+	$(Verb) $(RM) temp.sed
 
 # When cross-compiling, install a version of llvm-config that runs on the host.
 ifeq ($(LLVM_CROSS_COMPILING),1)

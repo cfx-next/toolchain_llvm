@@ -109,7 +109,7 @@ class IForm<bits<6> opcode, bit aa, bit lk, dag OOL, dag IOL, string asmstr,
 
 // 1.7.2 B-Form
 class BForm<bits<6> opcode, bit aa, bit lk, dag OOL, dag IOL, string asmstr>
-  : I<opcode, OOL, IOL, asmstr, BrB> {
+  : I<opcode, OOL, IOL, asmstr, IIC_BrB> {
   bits<7> BIBO;  // 2 bits of BI and 5 bits of BO.
   bits<3>  CR;
   bits<14> BD;
@@ -135,7 +135,7 @@ class BForm_1<bits<6> opcode, bits<5> bo, bit aa, bit lk, dag OOL, dag IOL,
 
 class BForm_2<bits<6> opcode, bits<5> bo, bits<5> bi, bit aa, bit lk,
               dag OOL, dag IOL, string asmstr>
-  : I<opcode, OOL, IOL, asmstr, BrB> {
+  : I<opcode, OOL, IOL, asmstr, IIC_BrB> {
   bits<14> BD;
 
   let Inst{6-10}  = bo;
@@ -147,7 +147,7 @@ class BForm_2<bits<6> opcode, bits<5> bo, bits<5> bi, bit aa, bit lk,
 
 class BForm_3<bits<6> opcode, bit aa, bit lk,
               dag OOL, dag IOL, string asmstr>
-  : I<opcode, OOL, IOL, asmstr, BrB> {
+  : I<opcode, OOL, IOL, asmstr, IIC_BrB> {
   bits<5> BO;
   bits<5> BI;
   bits<14> BD;
@@ -256,6 +256,15 @@ class DForm_4_zero<bits<6> opcode, dag OOL, dag IOL, string asmstr,
   : DForm_1<opcode, OOL, IOL, asmstr, itin, pattern> {
   let A = 0;
   let Addr = 0;
+}
+
+class DForm_4_fixedreg_zero<bits<6> opcode, bits<5> R, dag OOL, dag IOL,
+                            string asmstr, InstrItinClass itin,
+                            list<dag> pattern>
+  : DForm_4<opcode, OOL, IOL, asmstr, itin, pattern> {
+  let A = R;
+  let B = R;
+  let C = 0; 
 }
 
 class IForm_and_DForm_1<bits<6> opcode1, bit aa, bit lk, bits<6> opcode2,
