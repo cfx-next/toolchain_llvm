@@ -421,12 +421,6 @@ static void initialize(TargetLibraryInfo &TLI, const Triple &T,
     }
   }
 
-  if (T.getOS() == Triple::Android) {
-    TLI.setUnavailable(LibFunc::exp10l);
-    TLI.setUnavailable(LibFunc::exp10);
-    TLI.setUnavailable(LibFunc::exp10f);
-  }
-
   if (T.getOS() == Triple::IOS) {
     TLI.setUnavailable(LibFunc::exp10l);
     if (T.isOSVersionLT(7, 0)) {
