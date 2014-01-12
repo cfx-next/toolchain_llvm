@@ -15,10 +15,10 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/Analysis/Passes.h"
 #include "llvm/Analysis/Verifier.h"
-#include "llvm/Assembly/PrintModulePass.h"
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
+#include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/PassManager.h"
 #include "llvm/Support/CommandLine.h"
@@ -87,6 +87,14 @@ static cl::opt<std::string>
 PrintMachineInstrs("print-machineinstrs", cl::ValueOptional,
                    cl::desc("Print machine instrs"),
                    cl::value_desc("pass-name"), cl::init("option-unspecified"));
+
+// Temporary option to allow experimenting with MachineScheduler as a post-RA
+// scheduler. Targets can "properly" enable this with
+// substitutePass(&PostRASchedulerID, &MachineSchedulerID); Ideally it wouldn't
+// be part of the standard pass pipeline, and the target would just add a PostRA
+// scheduling pass wherever it wants.
+static cl::opt<bool> MISchedPostRA("misched-postra", cl::Hidden,
+  cl::desc("Run MachineScheduler post regalloc (independent of preRA sched)"));
 
 // Experimental option to run live interval analysis early.
 static cl::opt<bool> EarlyLiveIntervals("early-live-intervals", cl::Hidden,
@@ -381,7 +389,7 @@ void TargetPassConfig::addIRPasses() {
   if (getOptLevel() != CodeGenOpt::None && !DisableLSR) {
     addPass(createLoopStrengthReducePass());
     if (PrintLSR)
-      addPass(createPrintFunctionPass("\n\n*** Code after LSR ***\n", &dbgs()));
+      addPass(createPrintFunctionPass(dbgs(), "\n\n*** Code after LSR ***\n"));
   }
 
   addPass(createGCLoweringPass());
@@ -427,14 +435,13 @@ void TargetPassConfig::addCodeGenPrepare() {
 /// Add common passes that perform LLVM IR to IR transforms in preparation for
 /// instruction selection.
 void TargetPassConfig::addISelPrepare() {
-  addPass(createStackProtectorPass(TM));
-
   addPreISel();
 
+  addPass(createStackProtectorPass(TM));
+
   if (PrintISelInput)
-    addPass(createPrintFunctionPass("\n\n"
-                                    "*** Final LLVM Code input to ISel ***\n",
-                                    &dbgs()));
+    addPass(createPrintFunctionPass(
+        dbgs(), "\n\n*** Final LLVM Code input to ISel ***\n"));
 
   // All passes which modify the LLVM IR are now complete; run the verifier
   // to ensure that the IR is valid.
@@ -525,7 +532,10 @@ void TargetPassConfig::addMachinePasses() {
 
   // Second pass scheduler.
   if (getOptLevel() != CodeGenOpt::None) {
-    addPass(&PostRASchedulerID);
+    if (MISchedPostRA)
+      addPass(&PostMachineSchedulerID);
+    else
+      addPass(&PostRASchedulerID);
     printAndVerify("After PostRAScheduler");
   }
 

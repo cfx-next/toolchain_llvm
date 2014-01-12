@@ -52,7 +52,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Analysis/Dominators.h"
-#include "llvm/Assembly/Writer.h"
 #include "llvm/DebugInfo.h"
 #include "llvm/IR/CallingConv.h"
 #include "llvm/IR/Constants.h"
@@ -101,7 +100,7 @@ namespace {  // Anonymous namespace for class
         if (I->empty() || !I->back().isTerminator()) {
           dbgs() << "Basic Block in function '" << F.getName()
                  << "' does not have terminator!\n";
-          WriteAsOperand(dbgs(), I, true);
+          I->printAsOperand(dbgs(), true);
           dbgs() << "\n";
           Broken = true;
         }
@@ -348,7 +347,7 @@ namespace {
       if (isa<Instruction>(V)) {
         MessagesStr << *V << '\n';
       } else {
-        WriteAsOperand(MessagesStr, V, true, Mod);
+        V->printAsOperand(MessagesStr, true, Mod);
         MessagesStr << '\n';
       }
     }
@@ -550,9 +549,11 @@ void Verifier::visitGlobalAlias(GlobalAlias &GA) {
     ConstantExpr *CE = dyn_cast<ConstantExpr>(Aliasee);
     Assert1(CE &&
             (CE->getOpcode() == Instruction::BitCast ||
+             CE->getOpcode() == Instruction::AddrSpaceCast ||
              CE->getOpcode() == Instruction::GetElementPtr) &&
             isa<GlobalValue>(CE->getOperand(0)),
-            "Aliasee should be either GlobalValue or bitcast of GlobalValue",
+            "Aliasee should be either GlobalValue, bitcast or "
+             "addrspacecast of GlobalValue",
             &GA);
 
     if (CE->getOpcode() == Instruction::BitCast) {
@@ -813,26 +814,25 @@ void Verifier::VerifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
             !Attrs.hasAttribute(Idx, Attribute::Nest) &&
             !Attrs.hasAttribute(Idx, Attribute::StructRet) &&
             !Attrs.hasAttribute(Idx, Attribute::NoCapture) &&
-            !Attrs.hasAttribute(Idx, Attribute::Returned),
-            "Attribute 'byval', 'nest', 'sret', 'nocapture', and 'returned' "
-            "do not apply to return values!", V);
+            !Attrs.hasAttribute(Idx, Attribute::Returned) &&
+            !Attrs.hasAttribute(Idx, Attribute::InAlloca),
+            "Attributes 'byval', 'inalloca', 'nest', 'sret', 'nocapture', and "
+            "'returned' do not apply to return values!", V);
 
-  // Check for mutually incompatible attributes.
-  Assert1(!((Attrs.hasAttribute(Idx, Attribute::ByVal) &&
-             Attrs.hasAttribute(Idx, Attribute::Nest)) ||
-            (Attrs.hasAttribute(Idx, Attribute::ByVal) &&
-             Attrs.hasAttribute(Idx, Attribute::StructRet)) ||
-            (Attrs.hasAttribute(Idx, Attribute::Nest) &&
-             Attrs.hasAttribute(Idx, Attribute::StructRet))), "Attributes "
-          "'byval, nest, and sret' are incompatible!", V);
+  // Check for mutually incompatible attributes.  Only inreg is compatible with
+  // sret.
+  unsigned AttrCount = 0;
+  AttrCount += Attrs.hasAttribute(Idx, Attribute::ByVal);
+  AttrCount += Attrs.hasAttribute(Idx, Attribute::InAlloca);
+  AttrCount += Attrs.hasAttribute(Idx, Attribute::StructRet) ||
+               Attrs.hasAttribute(Idx, Attribute::InReg);
+  AttrCount += Attrs.hasAttribute(Idx, Attribute::Nest);
+  Assert1(AttrCount <= 1, "Attributes 'byval', 'inalloca', 'inreg', 'nest', "
+                          "and 'sret' are incompatible!", V);
 
-  Assert1(!((Attrs.hasAttribute(Idx, Attribute::ByVal) &&
-             Attrs.hasAttribute(Idx, Attribute::Nest)) ||
-            (Attrs.hasAttribute(Idx, Attribute::ByVal) &&
-             Attrs.hasAttribute(Idx, Attribute::InReg)) ||
-            (Attrs.hasAttribute(Idx, Attribute::Nest) &&
-             Attrs.hasAttribute(Idx, Attribute::InReg))), "Attributes "
-          "'byval, nest, and inreg' are incompatible!", V);
+  Assert1(!(Attrs.hasAttribute(Idx, Attribute::InAlloca) &&
+            Attrs.hasAttribute(Idx, Attribute::ReadOnly)), "Attributes "
+          "'inalloca and readonly' are incompatible!", V);
 
   Assert1(!(Attrs.hasAttribute(Idx, Attribute::StructRet) &&
             Attrs.hasAttribute(Idx, Attribute::Returned)), "Attributes "
@@ -855,14 +855,18 @@ void Verifier::VerifyParameterAttrs(AttributeSet Attrs, unsigned Idx, Type *Ty,
           "Wrong types for attribute: " +
           AttributeFuncs::typeIncompatible(Ty, Idx).getAsString(Idx), V);
 
-  if (PointerType *PTy = dyn_cast<PointerType>(Ty))
-    Assert1(!Attrs.hasAttribute(Idx, Attribute::ByVal) ||
-            PTy->getElementType()->isSized(),
-            "Attribute 'byval' does not support unsized types!", V);
-  else
+  if (PointerType *PTy = dyn_cast<PointerType>(Ty)) {
+    if (!PTy->getElementType()->isSized()) {
+      Assert1(!Attrs.hasAttribute(Idx, Attribute::ByVal) &&
+              !Attrs.hasAttribute(Idx, Attribute::InAlloca),
+              "Attributes 'byval' and 'inalloca' do not support unsized types!",
+              V);
+    }
+  } else {
     Assert1(!Attrs.hasAttribute(Idx, Attribute::ByVal),
             "Attribute 'byval' only applies to parameters with pointer type!",
             V);
+  }
 }
 
 // VerifyFunctionAttrs - Check parameter attributes against a function type.
@@ -1533,6 +1537,15 @@ void Verifier::VerifyCallSite(CallSite CS) {
   // Verify call attributes.
   VerifyFunctionAttrs(FTy, Attrs, I);
 
+  // Verify that values used for inalloca parameters are in fact allocas.
+  for (unsigned i = 0, e = CS.arg_size(); i != e; ++i) {
+    if (!Attrs.hasAttribute(1 + i, Attribute::InAlloca))
+      continue;
+    Value *Arg = CS.getArgument(i);
+    Assert2(isa<AllocaInst>(Arg), "Inalloca argument is not an alloca!", I,
+            Arg);
+  }
+
   if (FTy->isVarArg()) {
     // FIXME? is 'nest' even legal here?
     bool SawNest = false;
@@ -1870,6 +1883,22 @@ void Verifier::visitAllocaInst(AllocaInst &AI) {
           &AI);
   Assert1(AI.getArraySize()->getType()->isIntegerTy(),
           "Alloca array size must have integer type", &AI);
+
+  // Verify that an alloca instruction is not used with inalloca more than once.
+  unsigned InAllocaUses = 0;
+  for (User::use_iterator UI = AI.use_begin(), UE = AI.use_end(); UI != UE;
+       ++UI) {
+    CallSite CS(*UI);
+    if (!CS)
+      continue;
+    unsigned ArgNo = CS.getArgumentNo(UI);
+    if (CS.isInAllocaArgument(ArgNo)) {
+      InAllocaUses++;
+      Assert1(InAllocaUses <= 1,
+              "Allocas can be used at most once with inalloca!", &AI);
+    }
+  }
+
   visitInstruction(AI);
 }
 

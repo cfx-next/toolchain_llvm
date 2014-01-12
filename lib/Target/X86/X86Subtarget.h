@@ -205,8 +205,14 @@ private:
   /// StackAlignOverride - Override the stack alignment.
   unsigned StackAlignOverride;
 
-  /// In64BitMode - True if compiling for 64-bit, false for 32-bit.
+  /// In64BitMode - True if compiling for 64-bit, false for 16-bit or 32-bit.
   bool In64BitMode;
+
+  /// In32BitMode - True if compiling for 32-bit, false for 16-bit or 64-bit.
+  bool In32BitMode;
+
+  /// In16BitMode - True if compiling for 16-bit, false for 32-bit or 64-bit.
+  bool In16BitMode;
 
 public:
   /// This constructor initializes the data members to match that
@@ -214,7 +220,7 @@ public:
   ///
   X86Subtarget(const std::string &TT, const std::string &CPU,
                const std::string &FS,
-               unsigned StackAlignOverride, bool is64Bit);
+               unsigned StackAlignOverride);
 
   /// getStackAlignment - Returns the minimum alignment known to hold of the
   /// stack frame on entry to the function and which must be maintained by every
@@ -244,9 +250,18 @@ public:
     return In64BitMode;
   }
 
+  bool is32Bit() const {
+    return In32BitMode;
+  }
+
+  bool is16Bit() const {
+    return In16BitMode;
+  }
+
   /// Is this x86_64 with the ILP32 programming model (x32 ABI)?
   bool isTarget64BitILP32() const {
-    return In64BitMode && (TargetTriple.getEnvironment() == Triple::GNUX32);
+    return In64BitMode && (TargetTriple.getEnvironment() == Triple::GNUX32 ||
+                           TargetTriple.getOS() == Triple::NaCl);
   }
 
   /// Is this x86_64 with the LP64 programming model (standard AMD64, no x32)?

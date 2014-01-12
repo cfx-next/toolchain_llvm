@@ -504,6 +504,10 @@ bool DICompositeType::Verify() const {
   if (!fieldIsMDString(DbgNode, 14))
     return false;
 
+  // A subroutine type can't be both & and &&.
+  if (isLValueReference() && isRValueReference())
+    return false;
+
   return DbgNode->getNumOperands() == 15;
 }
 
@@ -520,6 +524,11 @@ bool DISubprogram::Verify() const {
   // Containing type @ field 12.
   if (!fieldIsTypeRef(DbgNode, 12))
     return false;
+
+  // A subprogram can't be both & and &&.
+  if (isLValueReference() && isRValueReference())
+    return false;
+
   return DbgNode->getNumOperands() == 20;
 }
 
@@ -655,19 +664,6 @@ void DICompositeType::setTypeArray(DIArray Elements, DIArray TParams) {
   if (TParams)
     N->replaceOperandWith(13, TParams);
   DbgNode = N;
-}
-
-void DICompositeType::addMember(DIDescriptor D) {
-  SmallVector<llvm::Value *, 16> M;
-  DIArray OrigM = getTypeArray();
-  unsigned Elements = OrigM.getNumElements();
-  if (Elements == 1 && !OrigM.getElement(0))
-    Elements = 0;
-  M.reserve(Elements + 1);
-  for (unsigned i = 0; i != Elements; ++i)
-    M.push_back(OrigM.getElement(i));
-  M.push_back(D);
-  setTypeArray(DIArray(MDNode::get(DbgNode->getContext(), M)));
 }
 
 /// Generate a reference to this DIType. Uses the type identifier instead
@@ -1297,6 +1293,12 @@ void DIType::printInternal(raw_ostream &OS) const {
     OS << " [vector]";
   if (isStaticMember())
     OS << " [static]";
+
+  if (isLValueReference())
+    OS << " [reference]";
+
+  if (isRValueReference())
+    OS << " [rvalue reference]";
 }
 
 void DIDerivedType::printInternal(raw_ostream &OS) const {
@@ -1335,6 +1337,12 @@ void DISubprogram::printInternal(raw_ostream &OS) const {
     OS << " [private]";
   else if (isProtected())
     OS << " [protected]";
+
+  if (isLValueReference())
+    OS << " [reference]";
+
+  if (isRValueReference())
+    OS << " [rvalue reference]";
 
   StringRef Res = getName();
   if (!Res.empty())

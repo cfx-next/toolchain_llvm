@@ -491,6 +491,7 @@ void CppWriter::printAttributes(const AttributeSet &PAL,
       HANDLE_ATTR(NoUnwind);
       HANDLE_ATTR(NoAlias);
       HANDLE_ATTR(ByVal);
+      HANDLE_ATTR(InAlloca);
       HANDLE_ATTR(Nest);
       HANDLE_ATTR(ReadNone);
       HANDLE_ATTR(ReadOnly);
@@ -1917,13 +1918,13 @@ void CppWriter::printProgram(const std::string& fname,
 
   Out << "#include <llvm/ADT/SmallVector.h>\n";
   Out << "#include <llvm/Analysis/Verifier.h>\n";
-  Out << "#include <llvm/Assembly/PrintModulePass.h>\n";
   Out << "#include <llvm/IR/BasicBlock.h>\n";
   Out << "#include <llvm/IR/CallingConv.h>\n";
   Out << "#include <llvm/IR/Constants.h>\n";
   Out << "#include <llvm/IR/DerivedTypes.h>\n";
   Out << "#include <llvm/IR/Function.h>\n";
   Out << "#include <llvm/IR/GlobalVariable.h>\n";
+  Out << "#include <llvm/IR/IRPrintingPasses.h>\n";
   Out << "#include <llvm/IR/InlineAsm.h>\n";
   Out << "#include <llvm/IR/Instructions.h>\n";
   Out << "#include <llvm/IR/LLVMContext.h>\n";

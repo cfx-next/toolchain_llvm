@@ -17,12 +17,12 @@
 #ifndef LLVM_DEBUGINFO_H
 #define LLVM_DEBUGINFO_H
 
-#include "llvm/Support/Casting.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Dwarf.h"
 
 namespace llvm {
@@ -64,20 +64,22 @@ class DIDescriptor {
 
 public:
   enum {
-    FlagPrivate = 1 << 0,
-    FlagProtected = 1 << 1,
-    FlagFwdDecl = 1 << 2,
-    FlagAppleBlock = 1 << 3,
-    FlagBlockByrefStruct = 1 << 4,
-    FlagVirtual = 1 << 5,
-    FlagArtificial = 1 << 6,
-    FlagExplicit = 1 << 7,
-    FlagPrototyped = 1 << 8,
+    FlagPrivate           = 1 << 0,
+    FlagProtected         = 1 << 1,
+    FlagFwdDecl           = 1 << 2,
+    FlagAppleBlock        = 1 << 3,
+    FlagBlockByrefStruct  = 1 << 4,
+    FlagVirtual           = 1 << 5,
+    FlagArtificial        = 1 << 6,
+    FlagExplicit          = 1 << 7,
+    FlagPrototyped        = 1 << 8,
     FlagObjcClassComplete = 1 << 9,
-    FlagObjectPointer = 1 << 10,
-    FlagVector = 1 << 11,
-    FlagStaticMember = 1 << 12,
-    FlagIndirectVariable = 1 << 13
+    FlagObjectPointer     = 1 << 10,
+    FlagVector            = 1 << 11,
+    FlagStaticMember      = 1 << 12,
+    FlagIndirectVariable  = 1 << 13,
+    FlagLValueReference   = 1 << 14,
+    FlagRValueReference   = 1 << 15
   };
 
 protected:
@@ -313,6 +315,12 @@ public:
   }
   bool isVector() const { return (getFlags() & FlagVector) != 0; }
   bool isStaticMember() const { return (getFlags() & FlagStaticMember) != 0; }
+  bool isLValueReference() const {
+    return (getFlags() & FlagLValueReference) != 0;
+  }
+  bool isRValueReference() const {
+    return (getFlags() & FlagRValueReference) != 0;
+  }
   bool isValid() const { return DbgNode && isType(); }
 
   /// replaceAllUsesWith - Replace all uses of debug info referenced by
@@ -377,7 +385,6 @@ public:
 
   DIArray getTypeArray() const { return getFieldAs<DIArray>(10); }
   void setTypeArray(DIArray Elements, DIArray TParams = DIArray());
-  void addMember(DIDescriptor D);
   unsigned getRunTimeLang() const { return getUnsignedField(11); }
   DITypeRef getContainingType() const { return getFieldAs<DITypeRef>(12); }
   void setContainingType(DICompositeType ContainingType);
@@ -468,6 +475,19 @@ public:
   /// isPrototyped - Return true if this subprogram is prototyped.
   bool isPrototyped() const {
     return (getUnsignedField(13) & FlagPrototyped) != 0;
+  }
+
+  /// Return true if this subprogram is a C++11 reference-qualified
+  /// non-static member function (void foo() &).
+  unsigned isLValueReference() const {
+    return (getUnsignedField(13) & FlagLValueReference) != 0;
+  }
+
+  /// Return true if this subprogram is a C++11
+  /// rvalue-reference-qualified non-static member function
+  /// (void foo() &&).
+  unsigned isRValueReference() const {
+    return (getUnsignedField(13) & FlagRValueReference) != 0;
   }
 
   unsigned isOptimized() const;

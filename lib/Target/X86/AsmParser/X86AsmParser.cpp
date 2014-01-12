@@ -544,9 +544,21 @@ private:
     // FIXME: Can tablegen auto-generate this?
     return (STI.getFeatureBits() & X86::Mode64Bit) != 0;
   }
-  void SwitchMode() {
-    unsigned FB = ComputeAvailableFeatures(STI.ToggleFeature(X86::Mode64Bit));
+  bool is32BitMode() const {
+    // FIXME: Can tablegen auto-generate this?
+    return (STI.getFeatureBits() & X86::Mode32Bit) != 0;
+  }
+  bool is16BitMode() const {
+    // FIXME: Can tablegen auto-generate this?
+    return (STI.getFeatureBits() & X86::Mode16Bit) != 0;
+  }
+  void SwitchMode(uint64_t mode) {
+    uint64_t oldMode = STI.getFeatureBits() &
+        (X86::Mode64Bit | X86::Mode32Bit | X86::Mode16Bit);
+    unsigned FB = ComputeAvailableFeatures(STI.ToggleFeature(oldMode | mode));
     setAvailableFeatures(FB);
+    assert(mode == (STI.getFeatureBits() &
+                    (X86::Mode64Bit | X86::Mode32Bit | X86::Mode16Bit)));
   }
 
   bool isParsingIntelSyntax() {
@@ -1033,7 +1045,8 @@ struct X86Operand : public MCParsedAsmOperand {
 } // end anonymous namespace.
 
 bool X86AsmParser::isSrcOp(X86Operand &Op) {
-  unsigned basereg = is64BitMode() ? X86::RSI : X86::ESI;
+  unsigned basereg =
+      is64BitMode() ? X86::RSI : (is32BitMode() ? X86::ESI : X86::SI);
 
   return (Op.isMem() &&
     (Op.Mem.SegReg == 0 || Op.Mem.SegReg == X86::DS) &&
@@ -1043,7 +1056,8 @@ bool X86AsmParser::isSrcOp(X86Operand &Op) {
 }
 
 bool X86AsmParser::isDstOp(X86Operand &Op) {
-  unsigned basereg = is64BitMode() ? X86::RDI : X86::EDI;
+  unsigned basereg =
+      is64BitMode() ? X86::RDI : (is32BitMode() ? X86::EDI : X86::DI);
 
   return Op.isMem() &&
     (Op.Mem.SegReg == 0 || Op.Mem.SegReg == X86::ES) &&
@@ -1079,7 +1093,7 @@ bool X86AsmParser::ParseRegister(unsigned &RegNo,
     RegNo = MatchRegisterName(Tok.getString().lower());
 
   if (!is64BitMode()) {
-    // FIXME: This should be done using Requires<In32BitMode> and
+    // FIXME: This should be done using Requires<Not64BitMode> and
     // Requires<In64BitMode> so "eiz" usage in 64-bit instructions can be also
     // checked.
     // FIXME: Check AH, CH, DH, BH cannot be used in an instruction requiring a
@@ -1193,7 +1207,8 @@ X86AsmParser::CreateMemForInlineAsm(unsigned SegReg, const MCExpr *Disp,
     // operand to ensure proper matching.  Just pick a GPR based on the size of
     // a pointer.
     if (!Info.IsVarDecl) {
-      unsigned RegNo = is64BitMode() ? X86::RBX : X86::EBX;
+      unsigned RegNo =
+          is64BitMode() ? X86::RBX : (is32BitMode() ? X86::EBX : X86::BX);
       return X86Operand::CreateReg(RegNo, Start, End, /*AddressOf=*/true,
                                    SMLoc(), Identifier, Info.OpDecl);
     }
@@ -1329,12 +1344,37 @@ bool X86AsmParser::ParseIntelExpression(IntelExprStateMachine &SM, SMLoc &End) {
       }
       return Error(Tok.getLoc(), "Unexpected identifier!");
     }
-    case AsmToken::Integer:
+    case AsmToken::Integer: {
       if (isParsingInlineAsm() && SM.getAddImmPrefix())
         InstInfo->AsmRewrites->push_back(AsmRewrite(AOK_ImmPrefix,
                                                     Tok.getLoc()));
-      SM.onInteger(Tok.getIntVal());
+      // Look for 'b' or 'f' following an Integer as a directional label
+      SMLoc Loc = getTok().getLoc();
+      int64_t IntVal = getTok().getIntVal();
+      End = consumeToken();
+      UpdateLocLex = false;
+      if (getLexer().getKind() == AsmToken::Identifier) {
+        StringRef IDVal = getTok().getString();
+        if (IDVal == "f" || IDVal == "b") {
+          MCSymbol *Sym =
+            getContext().GetDirectionalLocalSymbol(IntVal,
+                                                   IDVal == "f" ? 1 : 0);
+          MCSymbolRefExpr::VariantKind Variant = MCSymbolRefExpr::VK_None;
+          const MCExpr *Val = 
+	    MCSymbolRefExpr::Create(Sym, Variant, getContext());
+          if (IDVal == "b" && Sym->isUndefined())
+            return Error(Loc, "invalid reference to undefined symbol");
+          StringRef Identifier = Sym->getName();
+          SM.onIdentifierExpr(Val, Identifier);
+          End = consumeToken();
+        } else {
+          SM.onInteger(IntVal);
+        }
+      } else {
+        SM.onInteger(IntVal);
+      }
       break;
+    }
     case AsmToken::Plus:    SM.onPlus(); break;
     case AsmToken::Minus:   SM.onMinus(); break;
     case AsmToken::Star:    SM.onStar(); break;
@@ -1587,7 +1627,8 @@ X86Operand *X86AsmParser::ParseIntelOffsetOfOperator() {
   // The offset operator will have an 'r' constraint, thus we need to create
   // register operand to ensure proper matching.  Just pick a GPR based on
   // the size of a pointer.
-  unsigned RegNo = is64BitMode() ? X86::RBX : X86::EBX;
+  unsigned RegNo =
+      is64BitMode() ? X86::RBX : (is32BitMode() ? X86::EBX : X86::BX);
   return X86Operand::CreateReg(RegNo, Start, End, /*GetAddress=*/true,
                                OffsetOfLoc, Identifier, Info.OpDecl);
 }
@@ -1684,6 +1725,13 @@ X86Operand *X86AsmParser::ParseIntelOperand() {
     }
 
     if (getLexer().isNot(AsmToken::LBrac)) {
+      // If a directional label (ie. 1f or 2b) was parsed above from
+      // ParseIntelExpression() then SM.getSym() was set to a pointer to
+      // to the MCExpr with the directional local symbol and this is a
+      // memory operand not an immediate operand.
+      if (SM.getSym())
+        return X86Operand::CreateMem(SM.getSym(), Start, End, Size);
+
       const MCExpr *ImmExpr = MCConstantExpr::Create(Imm, getContext());
       return X86Operand::CreateImm(ImmExpr, Start, End);
     }
@@ -1805,10 +1853,11 @@ X86Operand *X86AsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
   // If we reached here, then we just ate the ( of the memory operand.  Process
   // the rest of the memory operand.
   unsigned BaseReg = 0, IndexReg = 0, Scale = 1;
-  SMLoc IndexLoc;
+  SMLoc IndexLoc, BaseLoc;
 
   if (getLexer().is(AsmToken::Percent)) {
     SMLoc StartLoc, EndLoc;
+    BaseLoc = Parser.getTok().getLoc();
     if (ParseRegister(BaseReg, StartLoc, EndLoc)) return 0;
     if (BaseReg == X86::EIZ || BaseReg == X86::RIZ) {
       Error(StartLoc, "eiz and riz can only be used as index registers",
@@ -1851,6 +1900,11 @@ X86Operand *X86AsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
           }
 
           // Validate the scale amount.
+	  if (X86MCRegisterClasses[X86::GR16RegClassID].contains(BaseReg) &&
+              ScaleVal != 1) {
+            Error(Loc, "scale factor in 16-bit address must be 1");
+            return 0;
+	  }
           if (ScaleVal != 1 && ScaleVal != 2 && ScaleVal != 4 && ScaleVal != 8){
             Error(Loc, "scale factor in address must be 1, 2, 4 or 8");
             return 0;
@@ -1881,6 +1935,21 @@ X86Operand *X86AsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
   SMLoc MemEnd = Parser.getTok().getEndLoc();
   Parser.Lex(); // Eat the ')'.
 
+  // Check for use of invalid 16-bit registers. Only BX/BP/SI/DI are allowed,
+  // and then only in non-64-bit modes. Except for DX, which is a special case
+  // because an unofficial form of in/out instructions uses it.
+  if (X86MCRegisterClasses[X86::GR16RegClassID].contains(BaseReg) &&
+      (is64BitMode() || (BaseReg != X86::BX && BaseReg != X86::BP &&
+                         BaseReg != X86::SI && BaseReg != X86::DI)) &&
+      BaseReg != X86::DX) {
+    Error(BaseLoc, "invalid 16-bit base register");
+    return 0;
+  }
+  if (BaseReg == 0 &&
+      X86MCRegisterClasses[X86::GR16RegClassID].contains(IndexReg)) {
+    Error(IndexLoc, "16-bit memory operand may not include only index register");
+    return 0;
+  }
   // If we have both a base register and an index register make sure they are
   // both 64-bit or 32-bit registers.
   // To support VSIB, IndexReg can be 128-bit or 256-bit registers.
@@ -1889,15 +1958,29 @@ X86Operand *X86AsmParser::ParseMemOperand(unsigned SegReg, SMLoc MemStart) {
         (X86MCRegisterClasses[X86::GR16RegClassID].contains(IndexReg) ||
          X86MCRegisterClasses[X86::GR32RegClassID].contains(IndexReg)) &&
         IndexReg != X86::RIZ) {
-      Error(IndexLoc, "index register is 32-bit, but base register is 64-bit");
+      Error(BaseLoc, "base register is 64-bit, but index register is not");
       return 0;
     }
     if (X86MCRegisterClasses[X86::GR32RegClassID].contains(BaseReg) &&
         (X86MCRegisterClasses[X86::GR16RegClassID].contains(IndexReg) ||
          X86MCRegisterClasses[X86::GR64RegClassID].contains(IndexReg)) &&
         IndexReg != X86::EIZ){
-      Error(IndexLoc, "index register is 64-bit, but base register is 32-bit");
+      Error(BaseLoc, "base register is 32-bit, but index register is not");
       return 0;
+    }
+    if (X86MCRegisterClasses[X86::GR16RegClassID].contains(BaseReg)) {
+      if (X86MCRegisterClasses[X86::GR32RegClassID].contains(IndexReg) ||
+          X86MCRegisterClasses[X86::GR64RegClassID].contains(IndexReg)) {
+        Error(BaseLoc, "base register is 16-bit, but index register is not");
+        return 0;
+      }
+      if (((BaseReg == X86::BX || BaseReg == X86::BP) &&
+           IndexReg != X86::SI && IndexReg != X86::DI) ||
+          ((BaseReg == X86::SI || BaseReg == X86::DI) &&
+           IndexReg != X86::BX && IndexReg != X86::BP)) {
+        Error(BaseLoc, "invalid 16-bit base/index register combination");
+        return 0;
+      }
     }
   }
 
@@ -2035,6 +2118,7 @@ ParseInstruction(ParseInstructionInfo &Info, StringRef Name, SMLoc NameLoc,
           return true;
         }
       }
+      // TODO: add parsing of broadcasts {1to8}, {1to16}
       // Parse "zeroing non-masked" semantic {z}
       if (getLexer().is(AsmToken::LCurly)) {
         Operands.push_back(X86Operand::CreateToken("{z}", consumeToken()));
@@ -2646,18 +2730,24 @@ bool X86AsmParser::ParseDirectiveWord(unsigned Size, SMLoc L) {
 }
 
 /// ParseDirectiveCode
-///  ::= .code32 | .code64
+///  ::= .code16 | .code32 | .code64
 bool X86AsmParser::ParseDirectiveCode(StringRef IDVal, SMLoc L) {
-  if (IDVal == ".code32") {
+  if (IDVal == ".code16") {
     Parser.Lex();
-    if (is64BitMode()) {
-      SwitchMode();
+    if (!is16BitMode()) {
+      SwitchMode(X86::Mode16Bit);
+      getParser().getStreamer().EmitAssemblerFlag(MCAF_Code16);
+    }
+  } else  if (IDVal == ".code32") {
+    Parser.Lex();
+    if (!is32BitMode()) {
+      SwitchMode(X86::Mode32Bit);
       getParser().getStreamer().EmitAssemblerFlag(MCAF_Code32);
     }
   } else if (IDVal == ".code64") {
     Parser.Lex();
     if (!is64BitMode()) {
-      SwitchMode();
+      SwitchMode(X86::Mode64Bit);
       getParser().getStreamer().EmitAssemblerFlag(MCAF_Code64);
     }
   } else {

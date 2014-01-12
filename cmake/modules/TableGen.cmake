@@ -33,7 +33,7 @@ macro(tablegen project ofn)
         ${CMAKE_CURRENT_BINARY_DIR}/${ofn}.tmp
         ${CMAKE_CURRENT_BINARY_DIR}/${ofn}
     DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${ofn}.tmp
-    COMMENT ""
+    COMMENT "Updating ${ofn}..."
     )
 
   # `make clean' must remove all those generated files:
@@ -83,16 +83,6 @@ macro(add_tablegen target project)
   set(LLVM_LINK_COMPONENTS ${LLVM_LINK_COMPONENTS} TableGen)
   add_llvm_utility(${target} ${ARGN})
   set(LLVM_LINK_COMPONENTS ${${target}_OLD_LLVM_LINK_COMPONENTS})
-
-  # For Xcode builds, symlink bin/<target> to bin/<Config>/<target> so that
-  # a separately-configured Clang project can still find llvm-tblgen.
-  if (XCODE)
-    add_custom_target(${target}-top ALL
-      ${CMAKE_COMMAND} -E create_symlink 
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${CMAKE_CFG_INTDIR}/${target}${CMAKE_EXECUTABLE_SUFFIX}
-        ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${target}${CMAKE_EXECUTABLE_SUFFIX}
-      DEPENDS ${target})
-  endif ()
 
   set(${project}_TABLEGEN "${target}" CACHE
       STRING "Native TableGen executable. Saves building one when cross-compiling.")

@@ -66,7 +66,7 @@ protected:
   unsigned UniqueID;
 
   /// Node - MDNode for the compile unit.
-  DICompileUnit Node;
+  DICompileUnit CUNode;
 
   /// Unit debug information entry.
   const OwningPtr<DIE> UnitDie;
@@ -118,6 +118,9 @@ protected:
   /// corresponds to the MDNode mapped with the subprogram DIE.
   DenseMap<DIE *, const MDNode *> ContainingTypeMap;
 
+  // List of ranges for a given compile unit.
+  SmallVector<RangeSpan, 1> CURanges;
+
   // List of range lists for a given compile unit, separate from the ranges for
   // the CU itself.
   SmallVector<RangeSpanList, 1> CURangeLists;
@@ -143,11 +146,20 @@ protected:
   /// The label for the start of the range sets for the elements of this unit.
   MCSymbol *LabelRange;
 
+  /// Skeleton unit associated with this unit.
+  DwarfUnit *Skeleton;
+
   DwarfUnit(unsigned UID, DIE *D, DICompileUnit CU, AsmPrinter *A,
             DwarfDebug *DW, DwarfFile *DWU);
 
 public:
   virtual ~DwarfUnit();
+
+  /// Set the skeleton unit associated with this unit.
+  void setSkeleton(DwarfUnit *Skel) { Skeleton = Skel; }
+
+  /// Get the skeleton unit associated with this unit.
+  DwarfUnit *getSkeleton() const { return Skeleton; }
 
   /// Pass in the SectionSym even though we could recreate it in every compile
   /// unit (type units will have actually distinct symbols once they're in
@@ -168,9 +180,25 @@ public:
     return Section;
   }
 
+  /// If there's a skeleton then return the section symbol for the skeleton
+  /// unit, otherwise return the section symbol for this unit.
+  MCSymbol *getLocalSectionSym() const {
+    if (Skeleton)
+      return Skeleton->getSectionSym();
+    return getSectionSym();
+  }
+
   MCSymbol *getSectionSym() const {
     assert(Section);
     return SectionSym;
+  }
+
+  /// If there's a skeleton then return the begin label for the skeleton unit,
+  /// otherwise return the local label for this unit.
+  MCSymbol *getLocalLabelBegin() const {
+    if (Skeleton)
+      return Skeleton->getLabelBegin();
+    return getLabelBegin();
   }
 
   MCSymbol *getLabelBegin() const {
@@ -190,8 +218,8 @@ public:
 
   // Accessors.
   unsigned getUniqueID() const { return UniqueID; }
-  virtual uint16_t getLanguage() const = 0;
-  DICompileUnit getNode() const { return Node; }
+  uint16_t getLanguage() const { return CUNode.getLanguage(); }
+  DICompileUnit getCUNode() const { return CUNode; }
   DIE *getUnitDie() const { return UnitDie.get(); }
   const StringMap<const DIE *> &getGlobalNames() const { return GlobalNames; }
   const StringMap<const DIE *> &getGlobalTypes() const { return GlobalTypes; }
@@ -215,6 +243,13 @@ public:
 
   /// hasContent - Return true if this compile unit has something to write out.
   bool hasContent() const { return !UnitDie->getChildren().empty(); }
+
+  /// addRange - Add an address range to the list of ranges for this unit.
+  void addRange(RangeSpan Range) { CURanges.push_back(Range); }
+
+  /// getRanges - Get the list of ranges for this unit.
+  const SmallVectorImpl<RangeSpan> &getRanges() const { return CURanges; }
+  SmallVectorImpl<RangeSpan> &getRanges() { return CURanges; }
 
   /// addRangeList - Add an address range list to the list of range lists.
   void addRangeList(RangeSpanList Ranges) { CURangeLists.push_back(Ranges); }
@@ -510,18 +545,15 @@ public:
   /// addLabelAddress - Add a dwarf label attribute data and value using
   /// either DW_FORM_addr or DW_FORM_GNU_addr_index.
   void addLabelAddress(DIE *Die, dwarf::Attribute Attribute, MCSymbol *Label);
-
-  uint16_t getLanguage() const LLVM_OVERRIDE { return getNode().getLanguage(); }
 };
 
 class DwarfTypeUnit : public DwarfUnit {
 private:
-  uint16_t Language;
   uint64_t TypeSignature;
   const DIE *Ty;
 
 public:
-  DwarfTypeUnit(unsigned UID, DIE *D, uint16_t Language, AsmPrinter *A,
+  DwarfTypeUnit(unsigned UID, DIE *D, DICompileUnit CUNode, AsmPrinter *A,
                 DwarfDebug *DW, DwarfFile *DWU);
   virtual ~DwarfTypeUnit() LLVM_OVERRIDE;
 
@@ -529,7 +561,6 @@ public:
   uint64_t getTypeSignature() const { return TypeSignature; }
   void setType(const DIE *Ty) { this->Ty = Ty; }
 
-  uint16_t getLanguage() const LLVM_OVERRIDE { return Language; }
   /// Emit the header for this unit, not including the initial length field.
   void emitHeader(const MCSection *ASection, const MCSymbol *ASectionSym) const
       LLVM_OVERRIDE;
