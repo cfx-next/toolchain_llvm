@@ -303,6 +303,7 @@ public:
   SDValue LowerFP_TO_INT(SDValue Op, SelectionDAG &DAG, bool IsSigned) const;
   SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSTACKPOINTER(SDValue Op, SelectionDAG &DAG) const;
 
   SDValue LowerGlobalAddressELFSmall(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerGlobalAddressELFLarge(SDValue Op, SelectionDAG &DAG) const;

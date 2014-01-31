@@ -2164,6 +2164,14 @@ SDValue AArch64TargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG)
   return FrameAddr;
 }
 
+SDValue AArch64TargetLowering::LowerSTACKPOINTER(SDValue Op, SelectionDAG &DAG) const{
+  SDLoc dl(Op);
+
+  // Return XSP, which contains the stack pointer
+  unsigned StackPointerReg = AArch64::XSP;
+  return DAG.getCopyFromReg(DAG.getEntryNode(), dl, StackPointerReg, getPointerTy());
+}
+
 SDValue
 AArch64TargetLowering::LowerGlobalAddressELFLarge(SDValue Op,
                                                   SelectionDAG &DAG) const {
@@ -2941,6 +2949,7 @@ AArch64TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::FP_EXTEND: return LowerFP_EXTEND(Op, DAG);
   case ISD::RETURNADDR:    return LowerRETURNADDR(Op, DAG);
   case ISD::FRAMEADDR:     return LowerFRAMEADDR(Op, DAG);
+  case ISD::STACKPOINTER:  return LowerSTACKPOINTER(Op, DAG);
 
   case ISD::BlockAddress: return LowerBlockAddress(Op, DAG);
   case ISD::BRCOND: return LowerBRCOND(Op, DAG);

@@ -6703,6 +6703,28 @@ Note that calling this intrinsic does not prevent function inlining or
 other aggressive transformations, so the value returned may not be that
 of the obvious source-language caller.
 
+'``llvm.stackpointer``' Intrinsic
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Syntax:
+"""""""
+
+::
+
+      declare i8* @llvm.stackpointer()
+
+Overview:
+"""""""""
+
+The '``llvm.stackpointer``' intrinsic provides access to the stack
+pointer register.
+
+Semantics:
+""""""""""
+
+The '``llvm.stackpointer``' intrinsic returns the current value of the
+stack pointer register.
+
 .. _int_stacksave:
 
 '``llvm.stacksave``' Intrinsic

@@ -4585,6 +4585,9 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     setValue(&I, DAG.getNode(ISD::FRAMEADDR, sdl, TLI->getPointerTy(),
                              getValue(I.getArgOperand(0))));
     return 0;
+  case Intrinsic::stackpointer:
+    setValue(&I, DAG.getNode(ISD::STACKPOINTER, sdl, TLI->getPointerTy()));
+    return 0;
   case Intrinsic::setjmp:
     return &"_setjmp"[!TLI->usesUnderscoreSetJmp()];
   case Intrinsic::longjmp:

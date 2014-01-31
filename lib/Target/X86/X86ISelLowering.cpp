@@ -12201,6 +12201,16 @@ SDValue X86TargetLowering::LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
   return FrameAddr;
 }
 
+SDValue X86TargetLowering::LowerSTACKPOINTER(SDValue Op,
+                                           SelectionDAG &DAG) const {
+  EVT PtrVT = getPointerTy();
+  SDLoc dl(Op);  // FIXME probably not meaningful
+  const X86RegisterInfo *RegInfo =
+    static_cast<const X86RegisterInfo*>(getTargetMachine().getRegisterInfo());
+  unsigned StackPointerReg = RegInfo->getStackRegister();
+  return DAG.getCopyFromReg(DAG.getEntryNode(), dl, StackPointerReg, PtrVT);
+}
+
 SDValue X86TargetLowering::LowerFRAME_TO_ARGS_OFFSET(SDValue Op,
                                                      SelectionDAG &DAG) const {
   const X86RegisterInfo *RegInfo =
@@ -13598,6 +13608,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::INTRINSIC_W_CHAIN:  return LowerINTRINSIC_W_CHAIN(Op, Subtarget, DAG);
   case ISD::RETURNADDR:         return LowerRETURNADDR(Op, DAG);
   case ISD::FRAMEADDR:          return LowerFRAMEADDR(Op, DAG);
+  case ISD::STACKPOINTER:       return LowerSTACKPOINTER(Op, DAG);
   case ISD::FRAME_TO_ARGS_OFFSET:
                                 return LowerFRAME_TO_ARGS_OFFSET(Op, DAG);
   case ISD::DYNAMIC_STACKALLOC: return LowerDYNAMIC_STACKALLOC(Op, DAG);

@@ -242,6 +242,7 @@ def int_gcwrite : Intrinsic<[],
 //
 def int_returnaddress : Intrinsic<[llvm_ptr_ty], [llvm_i32_ty], [IntrNoMem]>;
 def int_frameaddress  : Intrinsic<[llvm_ptr_ty], [llvm_i32_ty], [IntrNoMem]>;
+def int_stackpointer  : Intrinsic<[llvm_ptr_ty], [], [IntrNoMem]>;
 
 // Note: we treat stacksave/stackrestore as writemem because we don't otherwise
 // model their dependencies on allocas.

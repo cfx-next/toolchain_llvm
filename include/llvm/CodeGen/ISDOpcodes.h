@@ -72,6 +72,9 @@ namespace ISD {
     /// the parent's frame or return address, and so on.
     FRAMEADDR, RETURNADDR,
 
+    /// STACKPOINTER - This node represents llvm.stackpointer on the DAG.
+    STACKPOINTER,
+
     /// FRAME_TO_ARGS_OFFSET - This node represents offset from frame pointer to
     /// first (possible) on-stack argument. This is needed for correct stack
     /// adjustment during unwind.
