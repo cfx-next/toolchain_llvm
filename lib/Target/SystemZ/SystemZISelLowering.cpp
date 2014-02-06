@@ -209,6 +209,9 @@ SystemZTargetLowering::SystemZTargetLowering(SystemZTargetMachine &tm)
   // Give LowerOperation the chance to replace 64-bit ORs with subregs.
   setOperationAction(ISD::OR, MVT::i64, Custom);
 
+  // Give LowerOperation the chance to optimize SIGN_EXTEND sequences.
+  setOperationAction(ISD::SIGN_EXTEND, MVT::i64, Custom);
+
   // FIXME: Can we support these natively?
   setOperationAction(ISD::SRL_PARTS, MVT::i64, Expand);
   setOperationAction(ISD::SHL_PARTS, MVT::i64, Expand);
@@ -334,6 +337,7 @@ bool SystemZTargetLowering::isFPImmLegal(const APFloat &Imm, EVT VT) const {
 }
 
 bool SystemZTargetLowering::allowsUnalignedMemoryAccesses(EVT VT,
+                                                          unsigned,
                                                           bool *Fast) const {
   // Unaligned accesses should never be slower than the expanded version.
   // We check specifically for aligned accesses in the few cases where
@@ -1073,7 +1077,7 @@ static IPMConversion getIPMConversion(unsigned CCValid, unsigned CCMask) {
   if (CCMask == (CCValid & (SystemZ::CCMASK_0 | SystemZ::CCMASK_3)))
     return IPMConversion(0, -(1 << SystemZ::IPM_CC), SystemZ::IPM_CC + 1);
 
-  // The remaing cases are 1, 2, 0/1/3 and 0/2/3.  All these are
+  // The remaining cases are 1, 2, 0/1/3 and 0/2/3.  All these are
   // can be done by inverting the low CC bit and applying one of the
   // sign-based extractions above.
   if (CCMask == (CCValid & SystemZ::CCMASK_1))
@@ -2174,6 +2178,36 @@ SDValue SystemZTargetLowering::lowerOR(SDValue Op, SelectionDAG &DAG) const {
                                    MVT::i64, HighOp, Low32);
 }
 
+SDValue SystemZTargetLowering::lowerSIGN_EXTEND(SDValue Op,
+                                                SelectionDAG &DAG) const {
+  // Convert (sext (ashr (shl X, C1), C2)) to
+  // (ashr (shl (anyext X), C1'), C2')), since wider shifts are as
+  // cheap as narrower ones.
+  SDValue N0 = Op.getOperand(0);
+  EVT VT = Op.getValueType();
+  if (N0.hasOneUse() && N0.getOpcode() == ISD::SRA) {
+    ConstantSDNode *SraAmt = dyn_cast<ConstantSDNode>(N0.getOperand(1));
+    SDValue Inner = N0.getOperand(0);
+    if (SraAmt && Inner.hasOneUse() && Inner.getOpcode() == ISD::SHL) {
+      ConstantSDNode *ShlAmt = dyn_cast<ConstantSDNode>(Inner.getOperand(1));
+      if (ShlAmt) {
+        unsigned Extra = (VT.getSizeInBits() -
+                          N0.getValueType().getSizeInBits());
+        unsigned NewShlAmt = ShlAmt->getZExtValue() + Extra;
+        unsigned NewSraAmt = SraAmt->getZExtValue() + Extra;
+        EVT ShiftVT = N0.getOperand(1).getValueType();
+        SDValue Ext = DAG.getNode(ISD::ANY_EXTEND, SDLoc(Inner), VT,
+                                  Inner.getOperand(0));
+        SDValue Shl = DAG.getNode(ISD::SHL, SDLoc(Inner), VT, Ext,
+                                  DAG.getConstant(NewShlAmt, ShiftVT));
+        return DAG.getNode(ISD::SRA, SDLoc(N0), VT, Shl,
+                           DAG.getConstant(NewSraAmt, ShiftVT));
+      }
+    }
+  }
+  return SDValue();
+}
+
 // Op is an atomic load.  Lower it into a normal volatile load.
 SDValue SystemZTargetLowering::lowerATOMIC_LOAD(SDValue Op,
                                                 SelectionDAG &DAG) const {
@@ -2426,6 +2460,8 @@ SDValue SystemZTargetLowering::LowerOperation(SDValue Op,
     return lowerUDIVREM(Op, DAG);
   case ISD::OR:
     return lowerOR(Op, DAG);
+  case ISD::SIGN_EXTEND:
+    return lowerSIGN_EXTEND(Op, DAG);
   case ISD::ATOMIC_SWAP:
     return lowerATOMIC_LOAD_OP(Op, DAG, SystemZISD::ATOMIC_SWAPW);
   case ISD::ATOMIC_STORE:

@@ -156,7 +156,7 @@ void ARMTargetLowering::addDRTypeForNEON(MVT VT) {
 }
 
 void ARMTargetLowering::addQRTypeForNEON(MVT VT) {
-  addRegisterClass(VT, &ARM::QPRRegClass);
+  addRegisterClass(VT, &ARM::DPairRegClass);
   addTypeForNEON(VT, MVT::v2f64, MVT::v4i32);
 }
 
@@ -5995,7 +5995,7 @@ static SDValue LowerAtomicLoadStore(SDValue Op, SelectionDAG &DAG) {
   if (cast<AtomicSDNode>(Op)->getOrdering() <= Monotonic)
     return Op;
 
-  // Aquire/Release load/store is not legal for targets without a
+  // Acquire/Release load/store is not legal for targets without a
   // dmb or equivalent available.
   return SDValue();
 }
@@ -10176,7 +10176,8 @@ bool ARMTargetLowering::isDesirableToTransformToIntegerOp(unsigned Opc,
   return (VT == MVT::f32) && (Opc == ISD::LOAD || Opc == ISD::STORE);
 }
 
-bool ARMTargetLowering::allowsUnalignedMemoryAccesses(EVT VT, bool *Fast) const {
+bool ARMTargetLowering::allowsUnalignedMemoryAccesses(EVT VT, unsigned,
+                                                      bool *Fast) const {
   // The AllowsUnaliged flag models the SCTLR.A setting in ARM cpus
   bool AllowsUnaligned = Subtarget->allowsUnalignedMem();
 
@@ -10198,7 +10199,7 @@ bool ARMTargetLowering::allowsUnalignedMemoryAccesses(EVT VT, bool *Fast) const 
   case MVT::v2f64: {
     // For any little-endian targets with neon, we can support unaligned ld/st
     // of D and Q (e.g. {D0,D1}) registers by using vld1.i8/vst1.i8.
-    // A big-endian target may also explictly support unaligned accesses
+    // A big-endian target may also explicitly support unaligned accesses
     if (Subtarget->hasNEON() && (AllowsUnaligned || isLittleEndian())) {
       if (Fast)
         *Fast = true;
@@ -10230,11 +10231,11 @@ EVT ARMTargetLowering::getOptimalMemOpType(uint64_t Size,
     bool Fast;
     if (Size >= 16 &&
         (memOpAlign(SrcAlign, DstAlign, 16) ||
-         (allowsUnalignedMemoryAccesses(MVT::v2f64, &Fast) && Fast))) {
+         (allowsUnalignedMemoryAccesses(MVT::v2f64, 0, &Fast) && Fast))) {
       return MVT::v2f64;
     } else if (Size >= 8 &&
                (memOpAlign(SrcAlign, DstAlign, 8) ||
-                (allowsUnalignedMemoryAccesses(MVT::f64, &Fast) && Fast))) {
+                (allowsUnalignedMemoryAccesses(MVT::f64, 0, &Fast) && Fast))) {
       return MVT::f64;
     }
   }
@@ -11207,4 +11208,16 @@ bool ARMTargetLowering::getTgtMemIntrinsic(IntrinsicInfo &Info,
   }
 
   return false;
+}
+
+/// \brief Returns true if it is beneficial to convert a load of a constant
+/// to just the constant itself.
+bool ARMTargetLowering::shouldConvertConstantLoadToIntImm(const APInt &Imm,
+                                                          Type *Ty) const {
+  assert(Ty->isIntegerTy());
+
+  unsigned Bits = Ty->getPrimitiveSizeInBits();
+  if (Bits == 0 || Bits > 32)
+    return false;
+  return true;
 }

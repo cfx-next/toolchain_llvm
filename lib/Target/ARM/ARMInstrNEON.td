@@ -730,6 +730,8 @@ defm VLD1d32Twb : VLD1D3WB<{1,0,0,?}, "32">;
 defm VLD1d64Twb : VLD1D3WB<{1,1,0,?}, "64">;
 
 def VLD1d64TPseudo : VLDQQPseudo<IIC_VLD1x3>;
+def VLD1d64TPseudoWB_fixed : VLDQQWBfixedPseudo<IIC_VLD1x3>;
+def VLD1d64TPseudoWB_register : VLDQQWBregisterPseudo<IIC_VLD1x3>;
 
 // ...with 4 registers
 class VLD1D4<bits<4> op7_4, string Dt>
@@ -769,6 +771,8 @@ defm VLD1d32Qwb  : VLD1D4WB<{1,0,?,?}, "32">;
 defm VLD1d64Qwb  : VLD1D4WB<{1,1,?,?}, "64">;
 
 def VLD1d64QPseudo : VLDQQPseudo<IIC_VLD1x4>;
+def VLD1d64QPseudoWB_fixed : VLDQQWBfixedPseudo<IIC_VLD1x4>;
+def VLD1d64QPseudoWB_register : VLDQQWBregisterPseudo<IIC_VLD1x4>;
 
 //   VLD2     : Vector Load (multiple 2-element structures)
 class VLD2<bits<4> op11_8, bits<4> op7_4, string Dt, RegisterOperand VdTy,
@@ -1671,7 +1675,7 @@ defm VST1d32Twb : VST1D3WB<{1,0,0,?}, "32">;
 defm VST1d64Twb : VST1D3WB<{1,1,0,?}, "64">;
 
 def VST1d64TPseudo            : VSTQQPseudo<IIC_VST1x3>;
-def VST1d64TPseudoWB_fixed    : VSTQQWBPseudo<IIC_VST1x3u>;
+def VST1d64TPseudoWB_fixed    : VSTQQWBfixedPseudo<IIC_VST1x3u>;
 def VST1d64TPseudoWB_register : VSTQQWBPseudo<IIC_VST1x3u>;
 
 // ...with 4 registers
@@ -1714,7 +1718,7 @@ defm VST1d32Qwb : VST1D4WB<{1,0,?,?}, "32">;
 defm VST1d64Qwb : VST1D4WB<{1,1,?,?}, "64">;
 
 def VST1d64QPseudo            : VSTQQPseudo<IIC_VST1x4>;
-def VST1d64QPseudoWB_fixed    : VSTQQWBPseudo<IIC_VST1x4u>;
+def VST1d64QPseudoWB_fixed    : VSTQQWBfixedPseudo<IIC_VST1x4u>;
 def VST1d64QPseudoWB_register : VSTQQWBPseudo<IIC_VST1x4u>;
 
 //   VST2     : Vector Store (multiple 2-element structures)
@@ -4423,14 +4427,14 @@ defm VCLTz    : N2V_QHS_cmp<0b11, 0b11, 0b01, 0b00100, 0, "vclt", "s",
 
 //   VACGE    : Vector Absolute Compare Greater Than or Equal (aka VCAGE)
 def  VACGEd   : N3VDInt<1, 0, 0b00, 0b1110, 1, N3RegFrm, IIC_VBIND, "vacge",
-                        "f32", v2i32, v2f32, int_arm_neon_vacged, 0>;
+                        "f32", v2i32, v2f32, int_arm_neon_vacge, 0>;
 def  VACGEq   : N3VQInt<1, 0, 0b00, 0b1110, 1, N3RegFrm, IIC_VBINQ, "vacge",
-                        "f32", v4i32, v4f32, int_arm_neon_vacgeq, 0>;
+                        "f32", v4i32, v4f32, int_arm_neon_vacge, 0>;
 //   VACGT    : Vector Absolute Compare Greater Than (aka VCAGT)
 def  VACGTd   : N3VDInt<1, 0, 0b10, 0b1110, 1, N3RegFrm, IIC_VBIND, "vacgt",
-                        "f32", v2i32, v2f32, int_arm_neon_vacgtd, 0>;
+                        "f32", v2i32, v2f32, int_arm_neon_vacgt, 0>;
 def  VACGTq   : N3VQInt<1, 0, 0b10, 0b1110, 1, N3RegFrm, IIC_VBINQ, "vacgt",
-                        "f32", v4i32, v4f32, int_arm_neon_vacgtq, 0>;
+                        "f32", v4i32, v4f32, int_arm_neon_vacgt, 0>;
 //   VTST     : Vector Test Bits
 defm VTST     : N3V_QHS<0, 0, 0b1000, 1, IIC_VBINi4D, IIC_VBINi4D, IIC_VBINi4Q,
                         IIC_VBINi4Q, "vtst", "", NEONvtst, 1>;
@@ -5486,10 +5490,12 @@ def : Pat<(v4f32 (NEONvduplane (v4f32 QPR:$src), imm:$lane)),
                                    (DSubReg_i32_reg imm:$lane))),
                            (SubReg_i32_lane imm:$lane)))>;
 
-def  VDUPfdf : PseudoNeonI<(outs DPR:$dst), (ins SPR:$src), IIC_VMOVD, "",
-                    [(set DPR:$dst, (v2f32 (NEONvdup (f32 SPR:$src))))]>;
-def  VDUPfqf : PseudoNeonI<(outs QPR:$dst), (ins SPR:$src), IIC_VMOVD, "",
-                    [(set QPR:$dst, (v4f32 (NEONvdup (f32 SPR:$src))))]>;
+def : Pat<(v2f32 (NEONvdup (f32 SPR:$src))),
+          (v2f32 (VDUPLN32d (INSERT_SUBREG (v2f32 (IMPLICIT_DEF)),
+                             SPR:$src, ssub_0), (i32 0)))>;
+def : Pat<(v4f32 (NEONvdup (f32 SPR:$src))),
+          (v4f32 (VDUPLN32q (INSERT_SUBREG (v2f32 (IMPLICIT_DEF)),
+                             SPR:$src, ssub_0), (i32 0)))>;
 
 //   VMOVN    : Vector Narrowing Move
 defm VMOVN    : N2VN_HSD<0b11,0b11,0b10,0b00100,0,0, IIC_VMOVN,
@@ -5870,7 +5876,7 @@ defm VRINTPN : VRINT_FPI<"p", 0b111, int_arm_neon_vrintp>;
 
 // Cryptography instructions
 let PostEncoderMethod = "NEONThumb2DataIPostEncoder",
-    DecoderNamespace = "v8Crypto" in {
+    DecoderNamespace = "v8Crypto", hasSideEffects = 0 in {
   class AES<string op, bit op7, bit op6, SDPatternOperator Int>
     : N2VQIntXnp<0b00, 0b00, 0b011, op6, op7, NoItinerary,
                  !strconcat("aes", op), "8", v16i8, v16i8, Int>,
@@ -5900,16 +5906,44 @@ def AESE : AES2Op<"e", 0, 0, int_arm_neon_aese>;
 def AESIMC : AES<"imc", 1, 1, int_arm_neon_aesimc>;
 def AESMC : AES<"mc", 1, 0, int_arm_neon_aesmc>;
 
-def SHA1H : N2SHA<"1h", 0b01, 0b010, 1, 1, int_arm_neon_sha1h>;
+def SHA1H : N2SHA<"1h", 0b01, 0b010, 1, 1, null_frag>;
 def SHA1SU1 : N2SHA2Op<"1su1", 0b10, 0b011, 1, 0, int_arm_neon_sha1su1>;
 def SHA256SU0 : N2SHA2Op<"256su0", 0b10, 0b011, 1, 1, int_arm_neon_sha256su0>;
-def SHA1C : N3SHA3Op<"1c", 0b00100, 0b00, int_arm_neon_sha1c>;
-def SHA1M : N3SHA3Op<"1m", 0b00100, 0b10, int_arm_neon_sha1m>;
-def SHA1P : N3SHA3Op<"1p", 0b00100, 0b01, int_arm_neon_sha1p>;
+def SHA1C : N3SHA3Op<"1c", 0b00100, 0b00, null_frag>;
+def SHA1M : N3SHA3Op<"1m", 0b00100, 0b10, null_frag>;
+def SHA1P : N3SHA3Op<"1p", 0b00100, 0b01, null_frag>;
 def SHA1SU0 : N3SHA3Op<"1su0", 0b00100, 0b11, int_arm_neon_sha1su0>;
 def SHA256H : N3SHA3Op<"256h", 0b00110, 0b00, int_arm_neon_sha256h>;
 def SHA256H2 : N3SHA3Op<"256h2", 0b00110, 0b01, int_arm_neon_sha256h2>;
 def SHA256SU1 : N3SHA3Op<"256su1", 0b00110, 0b10, int_arm_neon_sha256su1>;
+
+def : Pat<(i32 (int_arm_neon_sha1h i32:$Rn)),
+          (COPY_TO_REGCLASS (f32 (EXTRACT_SUBREG
+              (SHA1H (SUBREG_TO_REG (i64 0),
+                                    (f32 (COPY_TO_REGCLASS i32:$Rn, SPR)),
+                                    ssub_0)),
+              ssub_0)), GPR)>;
+
+def : Pat<(v4i32 (int_arm_neon_sha1c v4i32:$hash_abcd, i32:$hash_e, v4i32:$wk)),
+          (SHA1C v4i32:$hash_abcd,
+                 (SUBREG_TO_REG (i64 0),
+                                (f32 (COPY_TO_REGCLASS i32:$hash_e, SPR)),
+                                ssub_0),
+                 v4i32:$wk)>;
+
+def : Pat<(v4i32 (int_arm_neon_sha1m v4i32:$hash_abcd, i32:$hash_e, v4i32:$wk)),
+          (SHA1M v4i32:$hash_abcd,
+                 (SUBREG_TO_REG (i64 0),
+                                (f32 (COPY_TO_REGCLASS i32:$hash_e, SPR)),
+                                ssub_0),
+                 v4i32:$wk)>;
+
+def : Pat<(v4i32 (int_arm_neon_sha1p v4i32:$hash_abcd, i32:$hash_e, v4i32:$wk)),
+          (SHA1P v4i32:$hash_abcd,
+                 (SUBREG_TO_REG (i64 0),
+                                (f32 (COPY_TO_REGCLASS i32:$hash_e, SPR)),
+                                ssub_0),
+                 v4i32:$wk)>;
 
 //===----------------------------------------------------------------------===//
 // NEON instructions for single-precision FP math

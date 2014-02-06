@@ -59,13 +59,13 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
-#include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/IVUsers.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/ScalarEvolutionExpander.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/Support/CommandLine.h"
@@ -803,7 +803,7 @@ public:
 
   bool operator<(const Cost &Other) const;
 
-  void Loose();
+  void Lose();
 
 #ifndef NDEBUG
   // Once any of the metrics loses, they must all remain losers.
@@ -863,7 +863,7 @@ void Cost::RateRegister(const SCEV *Reg,
         return;
 
       // Otherwise, do not consider this formula at all.
-      Loose();
+      Lose();
       return;
     }
     AddRecCost += 1; /// TODO: This should be a function of the stride.
@@ -902,7 +902,7 @@ void Cost::RatePrimaryRegister(const SCEV *Reg,
                                ScalarEvolution &SE, DominatorTree &DT,
                                SmallPtrSet<const SCEV *, 16> *LoserRegs) {
   if (LoserRegs && LoserRegs->count(Reg)) {
-    Loose();
+    Lose();
     return;
   }
   if (Regs.insert(Reg)) {
@@ -924,7 +924,7 @@ void Cost::RateFormula(const TargetTransformInfo &TTI,
   // Tally up the registers.
   if (const SCEV *ScaledReg = F.ScaledReg) {
     if (VisitedRegs.count(ScaledReg)) {
-      Loose();
+      Lose();
       return;
     }
     RatePrimaryRegister(ScaledReg, Regs, L, SE, DT, LoserRegs);
@@ -935,7 +935,7 @@ void Cost::RateFormula(const TargetTransformInfo &TTI,
        E = F.BaseRegs.end(); I != E; ++I) {
     const SCEV *BaseReg = *I;
     if (VisitedRegs.count(BaseReg)) {
-      Loose();
+      Lose();
       return;
     }
     RatePrimaryRegister(BaseReg, Regs, L, SE, DT, LoserRegs);
@@ -966,8 +966,8 @@ void Cost::RateFormula(const TargetTransformInfo &TTI,
   assert(isValid() && "invalid cost");
 }
 
-/// Loose - Set this cost to a losing value.
-void Cost::Loose() {
+/// Lose - Set this cost to a losing value.
+void Cost::Lose() {
   NumRegs = ~0u;
   AddRecCost = ~0u;
   NumIVMuls = ~0u;
@@ -4209,7 +4209,7 @@ void LSRInstance::SolveRecurse(SmallVectorImpl<const Formula *> &Solution,
 void LSRInstance::Solve(SmallVectorImpl<const Formula *> &Solution) const {
   SmallVector<const Formula *, 8> Workspace;
   Cost SolutionCost;
-  SolutionCost.Loose();
+  SolutionCost.Lose();
   Cost CurCost;
   SmallPtrSet<const SCEV *, 16> CurRegs;
   DenseSet<const SCEV *> VisitedRegs;
@@ -4694,7 +4694,8 @@ LSRInstance::ImplementSolution(const SmallVectorImpl<const Formula *> &Solution,
 
 LSRInstance::LSRInstance(Loop *L, Pass *P)
     : IU(P->getAnalysis<IVUsers>()), SE(P->getAnalysis<ScalarEvolution>()),
-      DT(P->getAnalysis<DominatorTree>()), LI(P->getAnalysis<LoopInfo>()),
+      DT(P->getAnalysis<DominatorTreeWrapperPass>().getDomTree()),
+      LI(P->getAnalysis<LoopInfo>()),
       TTI(P->getAnalysis<TargetTransformInfo>()), L(L), Changed(false),
       IVIncInsertPos(0) {
   // If LoopSimplify form is not available, stay out of trouble.
@@ -4873,7 +4874,7 @@ char LoopStrengthReduce::ID = 0;
 INITIALIZE_PASS_BEGIN(LoopStrengthReduce, "loop-reduce",
                 "Loop Strength Reduction", false, false)
 INITIALIZE_AG_DEPENDENCY(TargetTransformInfo)
-INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(ScalarEvolution)
 INITIALIZE_PASS_DEPENDENCY(IVUsers)
 INITIALIZE_PASS_DEPENDENCY(LoopInfo)
@@ -4898,8 +4899,8 @@ void LoopStrengthReduce::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<LoopInfo>();
   AU.addPreserved<LoopInfo>();
   AU.addRequiredID(LoopSimplifyID);
-  AU.addRequired<DominatorTree>();
-  AU.addPreserved<DominatorTree>();
+  AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addPreserved<DominatorTreeWrapperPass>();
   AU.addRequired<ScalarEvolution>();
   AU.addPreserved<ScalarEvolution>();
   // Requiring LoopSimplify a second time here prevents IVUsers from running
@@ -4911,6 +4912,9 @@ void LoopStrengthReduce::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 bool LoopStrengthReduce::runOnLoop(Loop *L, LPPassManager & /*LPM*/) {
+  if (skipOptnoneFunction(L))
+    return false;
+
   bool Changed = false;
 
   // Run the main LSR transformation.
@@ -4924,10 +4928,9 @@ bool LoopStrengthReduce::runOnLoop(Loop *L, LPPassManager & /*LPM*/) {
 #ifndef NDEBUG
     Rewriter.setDebugType(DEBUG_TYPE);
 #endif
-    unsigned numFolded =
-        Rewriter.replaceCongruentIVs(L, &getAnalysis<DominatorTree>(),
-                                     DeadInsts,
-                                     &getAnalysis<TargetTransformInfo>());
+    unsigned numFolded = Rewriter.replaceCongruentIVs(
+        L, &getAnalysis<DominatorTreeWrapperPass>().getDomTree(), DeadInsts,
+        &getAnalysis<TargetTransformInfo>());
     if (numFolded) {
       Changed = true;
       DeleteTriviallyDeadInstructions(DeadInsts);

@@ -3,20 +3,50 @@ include(LLVMProcessSources)
 include(LLVM-Config)
 
 function(llvm_update_compile_flags name)
-  get_property(target_compile_flags TARGET ${name} PROPERTY COMPILE_FLAGS)
-  if(NOT "${LLVM_COMPILE_FLAGS}" STREQUAL "")
-    set(target_compile_flags "${target_compile_flags} ${LLVM_COMPILE_FLAGS}")
+  get_property(sources TARGET ${name} PROPERTY SOURCES)
+  if("${sources}" MATCHES "\\.c(;|$)")
+    set(update_src_props ON)
   endif()
-  if(LLVM_NO_RTTI)
+
+  if(LLVM_REQUIRES_EH)
+    set(LLVM_REQUIRES_RTTI ON)
+  else()
+    if(LLVM_COMPILER_IS_GCC_COMPATIBLE)
+      list(APPEND LLVM_COMPILE_FLAGS "-fno-exceptions")
+    elseif(MSVC)
+      list(APPEND LLVM_COMPILE_DEFINITIONS _HAS_EXCEPTIONS=0)
+      list(APPEND LLVM_COMPILE_FLAGS "/EHs-c-")
+    endif()
+  endif()
+
+  if(NOT LLVM_REQUIRES_RTTI)
     list(APPEND LLVM_COMPILE_DEFINITIONS GTEST_HAS_RTTI=0)
     if (LLVM_COMPILER_IS_GCC_COMPATIBLE)
-      set(target_compile_flags "${target_compile_flags} -fno-rtti")
+      list(APPEND LLVM_COMPILE_FLAGS "-fno-rtti")
     elseif (MSVC)
-      llvm_replace_compiler_option(target_compile_flags "/GR" "/GR-")
+      list(APPEND LLVM_COMPILE_FLAGS "/GR-")
     endif ()
   endif()
 
-  set_property(TARGET ${name} PROPERTY COMPILE_FLAGS "${target_compile_flags}")
+  # Assume that;
+  #   - LLVM_COMPILE_FLAGS is list.
+  #   - PROPERTY COMPILE_FLAGS is string.
+  string(REPLACE ";" " " target_compile_flags "${LLVM_COMPILE_FLAGS}")
+
+  if(update_src_props)
+    foreach(fn ${sources})
+      get_filename_component(suf ${fn} EXT)
+      if("${suf}" STREQUAL ".cpp")
+        set_property(SOURCE ${fn} APPEND_STRING PROPERTY
+          COMPILE_FLAGS "${target_compile_flags}")
+      endif()
+    endforeach()
+  else()
+    # Update target props, since all sources are C++.
+    set_property(TARGET ${name} APPEND_STRING PROPERTY
+      COMPILE_FLAGS "${target_compile_flags}")
+  endif()
+
   set_property(TARGET ${name} APPEND PROPERTY COMPILE_DEFINITIONS ${LLVM_COMPILE_DEFINITIONS})
 endfunction()
 
@@ -72,6 +102,7 @@ function(add_llvm_symbol_exports target_name export_file)
   endif()
 
   add_custom_target(${target_name}_exports DEPENDS ${native_export_file})
+  set_target_properties(${target_name}_exports PROPERTIES FOLDER "Misc")
 
   get_property(srcs TARGET ${target_name} PROPERTY SOURCES)
   foreach(src ${srcs})
@@ -85,8 +116,12 @@ function(add_llvm_symbol_exports target_name export_file)
   # Force re-linking when the exports file changes. Actually, it
   # forces recompilation of the source file. The LINK_DEPENDS target
   # property only works for makefile-based generators.
-  set_property(SOURCE ${first_source_file} APPEND PROPERTY
-    OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${native_export_file})
+  # FIXME: This is not safe because this will create the same target
+  # ${native_export_file} in several different file:
+  # - One where we emitted ${target_name}_exports
+  # - One where we emitted the build command for the following object.
+  # set_property(SOURCE ${first_source_file} APPEND PROPERTY
+  #   OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${native_export_file})
 
   set_property(DIRECTORY APPEND
     PROPERTY ADDITIONAL_MAKE_CLEAN_FILES ${native_export_file})
@@ -95,21 +130,12 @@ function(add_llvm_symbol_exports target_name export_file)
 endfunction(add_llvm_symbol_exports)
 
 function(add_dead_strip target_name)
-  # FIXME: With MSVS, consider compiling with /Gy and linking with /OPT:REF?
-  # But MinSizeRel seems to add that automatically, so maybe disable these
-  # flags instead if LLVM_NO_DEAD_STRIP is set.
-  if(NOT CYGWIN AND NOT MINGW AND NOT MSVC)
-    if(NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-       SET(CMAKE_CXX_FLAGS
-           "${CMAKE_CXX_FLAGS}  -ffunction-sections -fdata-sections"
-           PARENT_SCOPE)
-    endif()
-  endif()
   if(NOT LLVM_NO_DEAD_STRIP)
     if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
       set_property(TARGET ${target_name} APPEND_STRING PROPERTY
                    LINK_FLAGS " -Wl,-dead_strip")
     elseif(NOT WIN32)
+      # Object files are compiled with -ffunction-data-sections.
       set_property(TARGET ${target_name} APPEND_STRING PROPERTY
                    LINK_FLAGS " -Wl,--gc-sections")
     endif()
@@ -141,6 +167,7 @@ macro(add_llvm_library name)
   add_library( ${name} ${ALL_FILES} )
   set_output_directory(${name} ${LLVM_RUNTIME_OUTPUT_INTDIR} ${LLVM_LIBRARY_OUTPUT_INTDIR})
   set_property( GLOBAL APPEND PROPERTY LLVM_LIBS ${name} )
+  llvm_update_compile_flags(${name})
   add_dead_strip( ${name} )
   if( LLVM_COMMON_DEPENDS )
     add_dependencies( ${name} ${LLVM_COMMON_DEPENDS} )
@@ -191,15 +218,10 @@ ${name} ignored.")
     add_custom_target(${name})
   else()
     llvm_process_sources( ALL_FILES ${ARGN} )
-    if (MODULE)
-      set(libkind MODULE)
-    else()
-      set(libkind SHARED)
-    endif()
-
-    add_library( ${name} ${libkind} ${ALL_FILES} )
+    add_library(${name} MODULE ${ALL_FILES})
     set_output_directory(${name} ${LLVM_RUNTIME_OUTPUT_INTDIR} ${LLVM_LIBRARY_OUTPUT_INTDIR})
     set_target_properties( ${name} PROPERTIES PREFIX "" )
+    llvm_update_compile_flags(${name})
     add_dead_strip( ${name} )
 
     if (LLVM_EXPORTED_SYMBOL_FILE)
@@ -241,6 +263,7 @@ macro(add_llvm_executable name)
   else()
     add_executable(${name} ${ALL_FILES})
   endif()
+  llvm_update_compile_flags(${name})
   add_dead_strip( ${name} )
 
   if (LLVM_EXPORTED_SYMBOL_FILE)
@@ -263,7 +286,6 @@ set (LLVM_TOOLCHAIN_TOOLS
   )
 
 macro(add_llvm_tool name)
-  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_TOOLS_BINARY_DIR})
   if( NOT LLVM_BUILD_TOOLS )
     set(EXCLUDE_FROM_ALL ON)
   endif()
@@ -280,7 +302,6 @@ endmacro(add_llvm_tool name)
 
 
 macro(add_llvm_example name)
-#  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${LLVM_EXAMPLES_BINARY_DIR})
   if( NOT LLVM_BUILD_EXAMPLES )
     set(EXCLUDE_FROM_ALL ON)
   endif()
@@ -377,10 +398,10 @@ function(add_unittest test_suite test_name)
   endif ()
 
   if (SUPPORTS_NO_VARIADIC_MACROS_FLAG)
-    set(LLVM_COMPILE_FLAGS "-Wno-variadic-macros")
+    list(APPEND LLVM_COMPILE_FLAGS "-Wno-variadic-macros")
   endif ()
 
-  set(LLVM_NO_RTTI ON)
+  set(LLVM_REQUIRES_RTTI OFF)
 
   add_llvm_executable(${test_name} ${ARGN})
   set(outdir ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR})
@@ -396,7 +417,6 @@ function(add_unittest test_suite test_name)
   if (NOT ${test_suite_folder} STREQUAL "NOTFOUND")
     set_property(TARGET ${test_name} PROPERTY FOLDER "${test_suite_folder}")
   endif ()
-  llvm_update_compile_flags(${test_name})
 endfunction()
 
 # This function provides an automatic way to 'configure'-like generate a file
@@ -434,11 +454,15 @@ function(configure_lit_site_cfg input output)
     set(LLVM_BUILD_MODE "%(build_mode)s")
   endif ()
 
+  # They below might not be the build tree but provided binary tree.
   set(LLVM_SOURCE_DIR ${LLVM_MAIN_SRC_DIR})
   set(LLVM_BINARY_DIR ${LLVM_BINARY_DIR})
-  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} LLVM_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
-  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} LLVM_LIBS_DIR  ${LLVM_LIBRARY_OUTPUT_INTDIR})
-  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} SHLIBDIR  ${LLVM_LIBRARY_OUTPUT_INTDIR})
+  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} LLVM_TOOLS_DIR ${LLVM_TOOLS_BINARY_DIR})
+  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} LLVM_LIBS_DIR  ${LLVM_LIBRARY_DIR})
+
+  # SHLIBDIR points the build tree.
+  string(REPLACE ${CMAKE_CFG_INTDIR} ${LLVM_BUILD_MODE} SHLIBDIR ${LLVM_LIBRARY_OUTPUT_INTDIR})
+
   set(PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
   set(ENABLE_SHARED ${LLVM_SHARED_LIBS_ENABLED})
   set(SHLIBPATH_VAR ${SHLIBPATH_VAR})

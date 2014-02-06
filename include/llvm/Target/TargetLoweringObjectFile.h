@@ -29,6 +29,7 @@ namespace llvm {
   class MCSymbol;
   class MCSymbolRefExpr;
   class MCStreamer;
+  class ConstantExpr;
   class GlobalValue;
   class TargetMachine;
   
@@ -55,6 +56,12 @@ public:
   virtual void emitPersonalityValue(MCStreamer &Streamer,
                                     const TargetMachine &TM,
                                     const MCSymbol *Sym) const;
+
+  /// getDepLibFromLinkerOpt - Extract the dependent library name from a linker
+  /// option string. Returns StringRef() if the option does not specify a library.
+  virtual StringRef getDepLibFromLinkerOpt(StringRef LinkerOption) const {
+    return StringRef();
+  }
 
   /// emitModuleFlags - Emit the module flags that the platform cares about.
   virtual void emitModuleFlags(MCStreamer &,
@@ -151,6 +158,11 @@ public:
   /// \brief Create a symbol reference to describe the given TLS variable when
   /// emitting the address in debug info.
   virtual const MCExpr *getDebugThreadLocalSymbol(const MCSymbol *Sym) const;
+
+  virtual const MCExpr *
+  getExecutableRelativeSymbol(const ConstantExpr *CE, Mangler *Mang) const {
+    return 0;
+  }
 
 protected:
   virtual const MCSection *

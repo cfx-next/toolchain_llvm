@@ -28,6 +28,19 @@ class LLVMContext;
 class Module;
 class tool_output_file;
 
+namespace opt_tool {
+enum OutputKind {
+  OK_NoOutput,
+  OK_OutputAssembly,
+  OK_OutputBitcode
+};
+enum VerifierKind {
+  VK_NoVerifier,
+  VK_VerifyInAndOut,
+  VK_VerifyEachPass
+};
+}
+
 /// \brief Driver function to run the new pass manager over a module.
 ///
 /// This function only exists factored away from opt.cpp in order to prevent
@@ -36,7 +49,7 @@ class tool_output_file;
 /// when the transition finishes.
 bool runPassPipeline(StringRef Arg0, LLVMContext &Context, Module &M,
                      tool_output_file *Out, StringRef PassPipeline,
-                     bool NoOutput);
+                     opt_tool::OutputKind OK, opt_tool::VerifierKind VK);
 }
 
 #endif

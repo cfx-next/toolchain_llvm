@@ -377,22 +377,18 @@ void Module::Dematerialize(GlobalValue *GV) {
     return Materializer->Dematerialize(GV);
 }
 
-bool Module::MaterializeAll(std::string *ErrInfo) {
+error_code Module::materializeAll() {
   if (!Materializer)
-    return false;
-  error_code EC = Materializer->MaterializeModule(this);
-  if (!EC)
-    return false;
-  if (ErrInfo)
-    *ErrInfo = EC.message();
-  return true;
+    return error_code::success();
+  return Materializer->MaterializeModule(this);
 }
 
-bool Module::MaterializeAllPermanently(std::string *ErrInfo) {
-  if (MaterializeAll(ErrInfo))
-    return true;
+error_code Module::materializeAllPermanently() {
+  if (error_code EC = materializeAll())
+    return EC;
+
   Materializer.reset();
-  return false;
+  return error_code::success();
 }
 
 //===----------------------------------------------------------------------===//

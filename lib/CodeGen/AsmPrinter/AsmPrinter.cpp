@@ -48,12 +48,15 @@
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Target/TargetRegisterInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
+#include "WinCodeViewLineTables.h"
 using namespace llvm;
 
 static const char *const DWARFGroupName = "DWARF Emission";
-static const char *const DbgTimerName = "DWARF Debug Writer";
+static const char *const DbgTimerName = "Debug Info Emission";
 static const char *const EHTimerName = "DWARF Exception Writer";
+static const char *const CodeViewLineTablesGroupName = "CodeView Line Tables";
 
 STATISTIC(EmittedInsts, "Number of machine instrs printed");
 
@@ -135,6 +138,14 @@ const DataLayout &AsmPrinter::getDataLayout() const {
   return *TM.getDataLayout();
 }
 
+const MCSubtargetInfo &AsmPrinter::getSubtargetInfo() const {
+  return TM.getSubtarget<MCSubtargetInfo>();
+}
+
+void AsmPrinter::EmitToStreamer(MCStreamer &S, const MCInst &Inst) {
+  S.EmitInstruction(Inst, getSubtargetInfo());
+}
+
 StringRef AsmPrinter::getTargetTriple() const {
   return TM.getTargetTriple();
 }
@@ -163,7 +174,7 @@ bool AsmPrinter::doInitialization(Module &M) {
   const_cast<TargetLoweringObjectFile&>(getObjFileLowering())
     .Initialize(OutContext, TM);
 
-  OutStreamer.InitStreamer();
+  OutStreamer.InitSections(false);
 
   Mang = new Mangler(TM.getDataLayout());
 
@@ -193,8 +204,14 @@ bool AsmPrinter::doInitialization(Module &M) {
   }
 
   if (MAI->doesSupportDebugInformation()) {
-    DD = new DwarfDebug(this, &M);
-    Handlers.push_back(HandlerInfo(DD, DbgTimerName, DWARFGroupName));
+    if (Triple(TM.getTargetTriple()).getOS() == Triple::Win32) {
+      Handlers.push_back(HandlerInfo(new WinCodeViewLineTables(this),
+                                     DbgTimerName,
+                                     CodeViewLineTablesGroupName));
+    } else {
+      DD = new DwarfDebug(this, &M);
+      Handlers.push_back(HandlerInfo(DD, DbgTimerName, DWARFGroupName));
+    }
   }
 
   DwarfException *DE = 0;
@@ -257,7 +274,6 @@ void AsmPrinter::EmitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const {
       OutStreamer.EmitSymbolAttribute(GVSym, MCSA_Weak);
     }
     return;
-  case GlobalValue::DLLExportLinkage:
   case GlobalValue::AppendingLinkage:
     // FIXME: appending linkage variables should go into a section of
     // their name or something.  For now, just emit them as external.
@@ -272,7 +288,6 @@ void AsmPrinter::EmitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const {
     return;
   case GlobalValue::AvailableExternallyLinkage:
     llvm_unreachable("Should never emit this");
-  case GlobalValue::DLLImportLinkage:
   case GlobalValue::ExternalWeakLinkage:
     llvm_unreachable("Don't know how to emit these");
   }
@@ -581,7 +596,7 @@ static bool emitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
 
   SmallString<128> Str;
   raw_svector_ostream OS(Str);
-  OS << '\t' << AP.MAI->getCommentString() << "DEBUG_VALUE: ";
+  OS << "DEBUG_VALUE: ";
 
   DIVariable V(MI->getOperand(2).getMetadata());
   if (V.getContext().isSubprogram()) {
@@ -629,7 +644,7 @@ static bool emitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
       // Suppress offset, it is not meaningful here.
       OS << "undef";
       // NOTE: Want this comment at start of line, don't emit with AddComment.
-      AP.OutStreamer.EmitRawText(OS.str());
+      AP.OutStreamer.emitRawComment(OS.str());
       return true;
     }
     if (Deref)
@@ -641,7 +656,7 @@ static bool emitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
     OS << '+' << Offset << ']';
 
   // NOTE: Want this comment at start of line, don't emit with AddComment.
-  AP.OutStreamer.EmitRawText(OS.str());
+  AP.OutStreamer.emitRawComment(OS.str());
   return true;
 }
 
@@ -750,9 +765,6 @@ void AsmPrinter::EmitFunctionBody() {
         if (isVerbose()) emitKill(II, *this);
         break;
       default:
-        if (!TM.hasMCUseLoc())
-          MCLineEntry::Make(&OutStreamer, getCurrentSection());
-
         EmitInstruction(II);
         break;
       }
@@ -783,7 +795,7 @@ void AsmPrinter::EmitFunctionBody() {
     TM.getInstrInfo()->getNoopForMachoTarget(Noop);
     if (Noop.getOpcode()) {
       OutStreamer.AddComment("avoids zero-length function");
-      OutStreamer.EmitInstruction(Noop);
+      OutStreamer.EmitInstruction(Noop, getSubtargetInfo());
     } else  // Target not mc-ized yet.
       OutStreamer.EmitRawText(StringRef("\tnop\n"));
   }
@@ -1485,7 +1497,7 @@ void AsmPrinter::EmitAlignment(unsigned NumBits, const GlobalValue *GV) const {
   if (getCurrentSection()->getKind().isText())
     OutStreamer.EmitCodeAlignment(1 << NumBits);
   else
-    OutStreamer.EmitValueToAlignment(1 << NumBits, 0, 1, 0);
+    OutStreamer.EmitValueToAlignment(1 << NumBits);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1513,6 +1525,10 @@ static const MCExpr *lowerConstant(const Constant *CV, AsmPrinter &AP) {
   if (CE == 0) {
     llvm_unreachable("Unknown constant value to lower!");
   }
+
+  if (const MCExpr *RelocExpr =
+          AP.getObjFileLowering().getExecutableRelativeSymbol(CE, AP.Mang))
+    return RelocExpr;
 
   switch (CE->getOpcode()) {
   default:
@@ -2151,10 +2167,9 @@ void AsmPrinter::EmitBasicBlockStart(const MachineBasicBlock *MBB) const {
 
   // Print the main label for the block.
   if (MBB->pred_empty() || isBlockOnlyReachableByFallthrough(MBB)) {
-    if (isVerbose() && OutStreamer.hasRawTextSupport()) {
+    if (isVerbose()) {
       // NOTE: Want this comment at start of line, don't emit with AddComment.
-      OutStreamer.EmitRawText(Twine(MAI->getCommentString()) + " BB#" +
-                              Twine(MBB->getNumber()) + ":");
+      OutStreamer.emitRawComment(" BB#" + Twine(MBB->getNumber()) + ":", false);
     }
   } else {
     OutStreamer.EmitTextLabel(MBB->getSymbol());

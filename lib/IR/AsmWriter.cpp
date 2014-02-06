@@ -73,9 +73,12 @@ static void PrintCallingConv(unsigned cc, raw_ostream &Out) {
   case CallingConv::Cold:          Out << "coldcc"; break;
   case CallingConv::WebKit_JS:     Out << "webkit_jscc"; break;
   case CallingConv::AnyReg:        Out << "anyregcc"; break;
+  case CallingConv::PreserveMost:  Out << "preserve_mostcc"; break;
+  case CallingConv::PreserveAll:   Out << "preserve_allcc"; break;
   case CallingConv::X86_StdCall:   Out << "x86_stdcallcc"; break;
   case CallingConv::X86_FastCall:  Out << "x86_fastcallcc"; break;
   case CallingConv::X86_ThisCall:  Out << "x86_thiscallcc"; break;
+  case CallingConv::X86_CDeclMethod:Out << "x86_cdeclmethodcc"; break;
   case CallingConv::Intel_OCL_BI:  Out << "intel_ocl_bicc"; break;
   case CallingConv::ARM_APCS:      Out << "arm_apcscc"; break;
   case CallingConv::ARM_AAPCS:     Out << "arm_aapcscc"; break;
@@ -1367,8 +1370,6 @@ static void PrintLinkage(GlobalValue::LinkageTypes LT,
   case GlobalValue::WeakODRLinkage:       Out << "weak_odr ";       break;
   case GlobalValue::CommonLinkage:        Out << "common ";         break;
   case GlobalValue::AppendingLinkage:     Out << "appending ";      break;
-  case GlobalValue::DLLImportLinkage:     Out << "dllimport ";      break;
-  case GlobalValue::DLLExportLinkage:     Out << "dllexport ";      break;
   case GlobalValue::ExternalWeakLinkage:  Out << "extern_weak ";    break;
   case GlobalValue::AvailableExternallyLinkage:
     Out << "available_externally ";
@@ -1383,6 +1384,15 @@ static void PrintVisibility(GlobalValue::VisibilityTypes Vis,
   case GlobalValue::DefaultVisibility: break;
   case GlobalValue::HiddenVisibility:    Out << "hidden "; break;
   case GlobalValue::ProtectedVisibility: Out << "protected "; break;
+  }
+}
+
+static void PrintDLLStorageClass(GlobalValue::DLLStorageClassTypes SCT,
+                                 formatted_raw_ostream &Out) {
+  switch (SCT) {
+  case GlobalValue::DefaultStorageClass: break;
+  case GlobalValue::DLLImportStorageClass: Out << "dllimport "; break;
+  case GlobalValue::DLLExportStorageClass: Out << "dllexport "; break;
   }
 }
 
@@ -1418,6 +1428,7 @@ void AssemblyWriter::printGlobal(const GlobalVariable *GV) {
 
   PrintLinkage(GV->getLinkage(), Out);
   PrintVisibility(GV->getVisibility(), Out);
+  PrintDLLStorageClass(GV->getDLLStorageClass(), Out);
   PrintThreadLocalModel(GV->getThreadLocalMode(), Out);
 
   if (unsigned AddressSpace = GV->getType()->getAddressSpace())
@@ -1455,6 +1466,7 @@ void AssemblyWriter::printAlias(const GlobalAlias *GA) {
     Out << " = ";
   }
   PrintVisibility(GA->getVisibility(), Out);
+  PrintDLLStorageClass(GA->getDLLStorageClass(), Out);
 
   Out << "alias ";
 
@@ -1552,6 +1564,7 @@ void AssemblyWriter::printFunction(const Function *F) {
 
   PrintLinkage(F->getLinkage(), Out);
   PrintVisibility(F->getVisibility(), Out);
+  PrintDLLStorageClass(F->getDLLStorageClass(), Out);
 
   // Print the calling convention.
   if (F->getCallingConv() != CallingConv::C) {
@@ -1933,6 +1946,8 @@ void AssemblyWriter::printInstruction(const Instruction &I) {
   } else if (const AllocaInst *AI = dyn_cast<AllocaInst>(&I)) {
     Out << ' ';
     TypePrinter.print(AI->getAllocatedType(), Out);
+    if (AI->isUsedWithInAlloca())
+      Out << ", inalloca";
     if (!AI->getArraySize() || AI->isArrayAllocation()) {
       Out << ", ";
       writeOperand(AI->getArraySize(), true);

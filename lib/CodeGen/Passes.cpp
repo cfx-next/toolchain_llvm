@@ -14,11 +14,11 @@
 
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/Analysis/Passes.h"
-#include "llvm/Analysis/Verifier.h"
 #include "llvm/CodeGen/GCStrategy.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/IR/IRPrintingPasses.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/PassManager.h"
 #include "llvm/Support/CommandLine.h"
@@ -61,7 +61,7 @@ static cl::opt<cl::boolOrDefault>
 OptimizeRegAlloc("optimize-regalloc", cl::Hidden,
     cl::desc("Enable optimized register allocation compilation path."));
 static cl::opt<cl::boolOrDefault>
-EnableMachineSched("enable-misched", cl::Hidden,
+EnableMachineSched("enable-misched",
     cl::desc("Enable the machine instruction scheduling pass."));
 static cl::opt<bool> DisablePostRAMachineLICM("disable-postra-machine-licm",
     cl::Hidden,
@@ -70,6 +70,8 @@ static cl::opt<bool> DisableMachineSink("disable-machine-sink", cl::Hidden,
     cl::desc("Disable Machine Sinking"));
 static cl::opt<bool> DisableLSR("disable-lsr", cl::Hidden,
     cl::desc("Disable Loop Strength Reduction Pass"));
+static cl::opt<bool> DisableConstantHoisting("disable-constant-hoisting",
+    cl::Hidden, cl::desc("Disable ConstantHoisting"));
 static cl::opt<bool> DisableCGP("disable-cgp", cl::Hidden,
     cl::desc("Disable Codegen Prepare"));
 static cl::opt<bool> DisableCopyProp("disable-copyprop", cl::Hidden,
@@ -396,6 +398,10 @@ void TargetPassConfig::addIRPasses() {
 
   // Make sure that no unreachable blocks are instruction selected.
   addPass(createUnreachableBlockEliminationPass());
+
+  // Prepare expensive constants for SelectionDAG.
+  if (getOptLevel() != CodeGenOpt::None && !DisableConstantHoisting)
+    addPass(createConstantHoistingPass());
 }
 
 /// Turn exception handling constructs into something the code generators can

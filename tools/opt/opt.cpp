@@ -19,14 +19,14 @@
 #include "llvm/Analysis/CallGraphSCCPass.h"
 #include "llvm/Analysis/LoopPass.h"
 #include "llvm/Analysis/RegionPass.h"
-#include "llvm/Analysis/Verifier.h"
-#include "llvm/Bitcode/ReaderWriter.h"
+#include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/CodeGen/CommandFlags.h"
 #include "llvm/DebugInfo.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/LinkAllIR.h"
 #include "llvm/LinkAllPasses.h"
@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <memory>
 using namespace llvm;
+using namespace opt_tool;
 
 // The OptimizationList is automatically populated with registered Passes by the
 // PassNameParser.
@@ -670,14 +671,25 @@ int main(int argc, char **argv) {
     if (CheckBitcodeOutputToConsole(Out->os(), !Quiet))
       NoOutput = true;
 
-  if (PassPipeline.getNumOccurrences() > 0)
+  if (PassPipeline.getNumOccurrences() > 0) {
+    OutputKind OK = OK_NoOutput;
+    if (!NoOutput)
+      OK = OutputAssembly ? OK_OutputAssembly : OK_OutputBitcode;
+
+    VerifierKind VK = VK_VerifyInAndOut;
+    if (NoVerify)
+      VK = VK_NoVerifier;
+    else if (VerifyEach)
+      VK = VK_VerifyEachPass;
+
     // The user has asked to use the new pass manager and provided a pipeline
     // string. Hand off the rest of the functionality to the new code for that
     // layer.
     return runPassPipeline(argv[0], Context, *M.get(), Out.get(), PassPipeline,
-                           NoOutput)
+                           OK, VK)
                ? 0
                : 1;
+  }
 
   // Create a PassManager to hold and optimize the collection of passes we are
   // about to build.
@@ -789,7 +801,9 @@ int main(int argc, char **argv) {
 
     const PassInfo *PassInf = PassList[i];
     Pass *P = 0;
-    if (PassInf->getNormalCtor())
+    if (PassInf->getTargetMachineCtor())
+      P = PassInf->getTargetMachineCtor()(TM.get());
+    else if (PassInf->getNormalCtor())
       P = PassInf->getNormalCtor()();
     else
       errs() << argv[0] << ": cannot create pass: "

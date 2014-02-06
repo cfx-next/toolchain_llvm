@@ -46,6 +46,7 @@
 
 namespace llvm {
   class LLVMContext;
+  class DiagnosticInfo;
   class GlobalValue;
   class Mangler;
   class MemoryBuffer;
@@ -70,6 +71,7 @@ struct LTOCodeGenerator {
   void setTargetOptions(llvm::TargetOptions options);
   void setDebugInfo(lto_debug_model);
   void setCodePICModel(lto_codegen_model);
+  void setInternalizeStrategy(lto_internalize_strategy);
 
   void setCpu(const char *mCpu) { MCpu = mCpu; }
 
@@ -114,6 +116,16 @@ struct LTOCodeGenerator {
                       bool disableGVNLoadPRE,
                       std::string &errMsg);
 
+  void setDiagnosticHandler(lto_diagnostic_handler_t, void *);
+
+  bool shouldInternalize() const {
+    return InternalizeStrategy != LTO_INTERNALIZE_NONE;
+  }
+
+  bool shouldOnlyInternalizeHidden() const {
+    return InternalizeStrategy == LTO_INTERNALIZE_HIDDEN;
+  }
+
 private:
   void initializeLTOPasses();
 
@@ -130,6 +142,10 @@ private:
                         llvm::Mangler &Mangler);
   bool determineTarget(std::string &errMsg);
 
+  static void DiagnosticHandler(const llvm::DiagnosticInfo &DI, void *Context);
+
+  void DiagnosticHandler2(const llvm::DiagnosticInfo &DI);
+
   typedef llvm::StringMap<uint8_t> StringSet;
 
   llvm::LLVMContext &Context;
@@ -138,6 +154,7 @@ private:
   bool EmitDwarfDebugInfo;
   bool ScopeRestrictionsDone;
   lto_codegen_model CodeModel;
+  lto_internalize_strategy InternalizeStrategy;
   StringSet MustPreserveSymbols;
   StringSet AsmUndefinedRefs;
   llvm::MemoryBuffer *NativeObjectFile;
@@ -145,6 +162,8 @@ private:
   std::string MCpu;
   std::string NativeObjectPath;
   llvm::TargetOptions Options;
+  lto_diagnostic_handler_t DiagHandler;
+  void *DiagContext;
 };
 
 #endif // LTO_CODE_GENERATOR_H

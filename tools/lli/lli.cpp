@@ -17,6 +17,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "RemoteMemoryManager.h"
 #include "RemoteTarget.h"
+#include "RemoteTargetExternal.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Bitcode/ReaderWriter.h"
 #include "llvm/CodeGen/LinkAllCodegenComponents.h"
@@ -94,12 +95,11 @@ namespace {
   // execution. The child process will be executed and will communicate with
   // lli via stdin/stdout pipes.
   cl::opt<std::string>
-  MCJITRemoteProcess("mcjit-remote-process",
-            cl::desc("Specify the filename of the process to launch "
-                     "for remote MCJIT execution.  If none is specified,"
-                     "\n\tremote execution will be simulated in-process."),
-            cl::value_desc("filename"),
-            cl::init(""));
+  ChildExecPath("mcjit-remote-process",
+                cl::desc("Specify the filename of the process to launch "
+                         "for remote MCJIT execution.  If none is specified,"
+                         "\n\tremote execution will be simulated in-process."),
+                cl::value_desc("filename"), cl::init(""));
 
   // Determine optimization level.
   cl::opt<char>
@@ -413,11 +413,10 @@ int main(int argc, char **argv, char * const *envp) {
   }
 
   // If not jitting lazily, load the whole bitcode file eagerly too.
-  std::string ErrorMsg;
   if (NoLazyCompilation) {
-    if (Mod->MaterializeAllPermanently(&ErrorMsg)) {
+    if (error_code EC = Mod->materializeAllPermanently()) {
       errs() << argv[0] << ": bitcode didn't read correctly.\n";
-      errs() << "Reason: " << ErrorMsg << "\n";
+      errs() << "Reason: " << EC.message() << "\n";
       exit(1);
     }
   }
@@ -433,6 +432,7 @@ int main(int argc, char **argv, char * const *envp) {
     DebugIRPass->runOnModule(*Mod);
   }
 
+  std::string ErrorMsg;
   EngineBuilder builder(Mod);
   builder.setMArch(MArch);
   builder.setMCPU(MCPU);
@@ -527,13 +527,13 @@ int main(int argc, char **argv, char * const *envp) {
   }
 
   for (unsigned i = 0, e = ExtraObjects.size(); i != e; ++i) {
-    object::ObjectFile *Obj = object::ObjectFile::createObjectFile(
-                                                         ExtraObjects[i]);
+    ErrorOr<object::ObjectFile *> Obj =
+        object::ObjectFile::createObjectFile(ExtraObjects[i]);
     if (!Obj) {
       Err.print(argv[0], errs());
       return 1;
     }
-    EE->addObjectFile(Obj);
+    EE->addObjectFile(Obj.get());
   }
 
   for (unsigned i = 0, e = ExtraArchives.size(); i != e; ++i) {
@@ -663,29 +663,34 @@ int main(int argc, char **argv, char * const *envp) {
     // and send it to the target.
 
     OwningPtr<RemoteTarget> Target;
-    if (!MCJITRemoteProcess.empty()) { // Remote execution on a child process
-      if (!RemoteTarget::hostSupportsExternalRemoteTarget()) {
-        errs() << "Warning: host does not support external remote targets.\n"
-               << "  Defaulting to simulated remote execution\n";
-        Target.reset(RemoteTarget::createRemoteTarget());
-      } else {
-        std::string ChildEXE = sys::FindProgramByName(MCJITRemoteProcess);
-        if (ChildEXE == "") {
-          errs() << "Unable to find child target: '\''" << MCJITRemoteProcess << "\'\n";
-          return -1;
-        }
-        Target.reset(RemoteTarget::createExternalRemoteTarget(ChildEXE));
+    if (!ChildExecPath.empty()) { // Remote execution on a child process
+#ifndef LLVM_ON_UNIX
+      // FIXME: Remove this pointless fallback mode which causes tests to "pass"
+      // on platforms where they should XFAIL.
+      errs() << "Warning: host does not support external remote targets.\n"
+             << "  Defaulting to simulated remote execution\n";
+      Target.reset(new RemoteTarget);
+#else
+      if (!sys::fs::can_execute(ChildExecPath)) {
+        errs() << "Unable to find usable child executable: '" << ChildExecPath
+               << "'\n";
+        return -1;
       }
+      Target.reset(new RemoteTargetExternal(ChildExecPath));
+#endif
     } else {
       // No child process name provided, use simulated remote execution.
-      Target.reset(RemoteTarget::createRemoteTarget());
+      Target.reset(new RemoteTarget);
     }
 
     // Give the memory manager a pointer to our remote target interface object.
     MM->setRemoteTarget(Target.get());
 
     // Create the remote target.
-    Target->create();
+    if (!Target->create()) {
+      errs() << "ERROR: " << Target->getErrorMsg() << "\n";
+      return EXIT_FAILURE;
+    }
 
     // Since we're executing in a (at least simulated) remote address space,
     // we can't use the ExecutionEngine::runFunctionAsMain(). We have to
@@ -702,7 +707,7 @@ int main(int argc, char **argv, char * const *envp) {
     DEBUG(dbgs() << "Executing '" << EntryFn->getName() << "' at 0x"
                  << format("%llx", Entry) << "\n");
 
-    if (Target->executeCode(Entry, Result))
+    if (!Target->executeCode(Entry, Result))
       errs() << "ERROR: " << Target->getErrorMsg() << "\n";
 
     // Like static constructors, the remote target MCJIT support doesn't handle

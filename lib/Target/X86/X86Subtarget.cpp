@@ -55,7 +55,7 @@ unsigned char X86Subtarget::
 ClassifyGlobalReference(const GlobalValue *GV, const TargetMachine &TM) const {
   // DLLImport only exists on windows, it is implemented as a load from a
   // DLLIMPORT stub.
-  if (GV->hasDLLImportLinkage())
+  if (GV->hasDLLImportStorageClass())
     return X86II::MO_DLLIMPORT;
 
   // Determine whether this is a reference to a definition or a declaration.
@@ -558,8 +558,10 @@ X86Subtarget::X86Subtarget(const std::string &TT, const std::string &CPU,
   , TargetTriple(TT)
   , StackAlignOverride(StackAlignOverride)
   , In64BitMode(TargetTriple.getArch() == Triple::x86_64)
-  , In32BitMode(TargetTriple.getArch() == Triple::x86)
-  , In16BitMode(false) {
+  , In32BitMode(TargetTriple.getArch() == Triple::x86 &&
+                TargetTriple.getEnvironment() != Triple::CODE16)
+  , In16BitMode(TargetTriple.getArch() == Triple::x86 &&
+                TargetTriple.getEnvironment() == Triple::CODE16) {
   initializeEnvironment();
   resetSubtargetFeatures(CPU, FS);
 }

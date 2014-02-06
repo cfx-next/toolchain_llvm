@@ -245,8 +245,8 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const {
     AU.addRequiredID(LowerSwitchID);
-    AU.addRequired<DominatorTree>();
-    AU.addPreserved<DominatorTree>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addPreserved<DominatorTreeWrapperPass>();
     RegionPass::getAnalysisUsage(AU);
   }
 };
@@ -258,7 +258,7 @@ char StructurizeCFG::ID = 0;
 INITIALIZE_PASS_BEGIN(StructurizeCFG, "structurizecfg", "Structurize the CFG",
                       false, false)
 INITIALIZE_PASS_DEPENDENCY(LowerSwitch)
-INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(RegionInfo)
 INITIALIZE_PASS_END(StructurizeCFG, "structurizecfg", "Structurize the CFG",
                     false, false)
@@ -277,9 +277,8 @@ bool StructurizeCFG::doInitialization(Region *R, RGPassManager &RGM) {
 
 /// \brief Build up the general order of nodes
 void StructurizeCFG::orderNodes() {
-  scc_iterator<Region *> I = scc_begin(ParentRegion),
-                         E = scc_end(ParentRegion);
-  for (Order.clear(); I != E; ++I) {
+  scc_iterator<Region *> I = scc_begin(ParentRegion);
+  for (Order.clear(); !I.isAtEnd(); ++I) {
     std::vector<RegionNode *> &Nodes = *I;
     Order.append(Nodes.begin(), Nodes.end());
   }
@@ -876,7 +875,7 @@ bool StructurizeCFG::runOnRegion(Region *R, RGPassManager &RGM) {
   Func = R->getEntry()->getParent();
   ParentRegion = R;
 
-  DT = &getAnalysis<DominatorTree>();
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
 
   orderNodes();
   collectInfos();

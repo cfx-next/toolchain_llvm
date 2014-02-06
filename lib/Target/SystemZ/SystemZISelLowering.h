@@ -209,8 +209,8 @@ public:
   virtual bool isFPImmLegal(const APFloat &Imm, EVT VT) const LLVM_OVERRIDE;
   virtual bool isLegalAddressingMode(const AddrMode &AM, Type *Ty) const
      LLVM_OVERRIDE;
-  virtual bool allowsUnalignedMemoryAccesses(EVT VT, bool *Fast) const
-    LLVM_OVERRIDE;
+  virtual bool allowsUnalignedMemoryAccesses(EVT VT, unsigned AS,
+                                             bool *Fast) const LLVM_OVERRIDE;
   virtual bool isTruncateFree(Type *, Type *) const LLVM_OVERRIDE;
   virtual bool isTruncateFree(EVT, EVT) const LLVM_OVERRIDE;
   virtual const char *getTargetNodeName(unsigned Opcode) const LLVM_OVERRIDE;
@@ -279,6 +279,7 @@ private:
   SDValue lowerUDIVREM(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerBITCAST(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerOR(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerSIGN_EXTEND(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerATOMIC_LOAD(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerATOMIC_STORE(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerATOMIC_LOAD_OP(SDValue Op, SelectionDAG &DAG,

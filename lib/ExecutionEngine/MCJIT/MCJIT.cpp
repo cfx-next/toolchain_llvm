@@ -21,8 +21,8 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
-#include "llvm/PassManager.h"
 #include "llvm/Object/Archive.h"
+#include "llvm/PassManager.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -301,7 +301,7 @@ uint64_t MCJIT::getSymbolAddress(const std::string &Name,
     object::Archive *A = *I;
     // Look for our symbols in each Archive
     object::Archive::child_iterator ChildIt = A->findSym(Name);
-    if (ChildIt != A->end_children()) {
+    if (ChildIt != A->child_end()) {
       OwningPtr<object::Binary> ChildBin;
       // FIXME: Support nested archives?
       if (!ChildIt->getAsBinary(ChildBin) && ChildBin->isObject()) {

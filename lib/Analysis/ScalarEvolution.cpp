@@ -64,7 +64,6 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/InstructionSimplify.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolutionExpressions.h"
@@ -72,6 +71,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instructions.h"
@@ -113,7 +113,7 @@ VerifySCEV("verify-scev",
 INITIALIZE_PASS_BEGIN(ScalarEvolution, "scalar-evolution",
                 "Scalar Evolution Analysis", false, true)
 INITIALIZE_PASS_DEPENDENCY(LoopInfo)
-INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfo)
 INITIALIZE_PASS_END(ScalarEvolution, "scalar-evolution",
                 "Scalar Evolution Analysis", false, true)
@@ -321,7 +321,7 @@ const SCEV *ScalarEvolution::getConstant(ConstantInt *V) {
   return S;
 }
 
-const SCEV *ScalarEvolution::getConstant(const APInt& Val) {
+const SCEV *ScalarEvolution::getConstant(const APInt &Val) {
   return getConstant(ConstantInt::get(getContext(), Val));
 }
 
@@ -2239,6 +2239,77 @@ const SCEV *ScalarEvolution::getUDivExpr(const SCEV *LHS,
   return S;
 }
 
+static const APInt gcd(const SCEVConstant *C1, const SCEVConstant *C2) {
+  APInt A = C1->getValue()->getValue().abs();
+  APInt B = C2->getValue()->getValue().abs();
+  uint32_t ABW = A.getBitWidth();
+  uint32_t BBW = B.getBitWidth();
+
+  if (ABW > BBW)
+    B = B.zext(ABW);
+  else if (ABW < BBW)
+    A = A.zext(BBW);
+
+  return APIntOps::GreatestCommonDivisor(A, B);
+}
+
+/// getUDivExactExpr - Get a canonical unsigned division expression, or
+/// something simpler if possible. There is no representation for an exact udiv
+/// in SCEV IR, but we can attempt to remove factors from the LHS and RHS.
+/// We can't do this when it's not exact because the udiv may be clearing bits.
+const SCEV *ScalarEvolution::getUDivExactExpr(const SCEV *LHS,
+                                              const SCEV *RHS) {
+  // TODO: we could try to find factors in all sorts of things, but for now we
+  // just deal with u/exact (multiply, constant). See SCEVDivision towards the
+  // end of this file for inspiration.
+
+  const SCEVMulExpr *Mul = dyn_cast<SCEVMulExpr>(LHS);
+  if (!Mul)
+    return getUDivExpr(LHS, RHS);
+
+  if (const SCEVConstant *RHSCst = dyn_cast<SCEVConstant>(RHS)) {
+    // If the mulexpr multiplies by a constant, then that constant must be the
+    // first element of the mulexpr.
+    if (const SCEVConstant *LHSCst =
+            dyn_cast<SCEVConstant>(Mul->getOperand(0))) {
+      if (LHSCst == RHSCst) {
+        SmallVector<const SCEV *, 2> Operands;
+        Operands.append(Mul->op_begin() + 1, Mul->op_end());
+        return getMulExpr(Operands);
+      }
+
+      // We can't just assume that LHSCst divides RHSCst cleanly, it could be
+      // that there's a factor provided by one of the other terms. We need to
+      // check.
+      APInt Factor = gcd(LHSCst, RHSCst);
+      if (!Factor.isIntN(1)) {
+        LHSCst = cast<SCEVConstant>(
+            getConstant(LHSCst->getValue()->getValue().udiv(Factor)));
+        RHSCst = cast<SCEVConstant>(
+            getConstant(RHSCst->getValue()->getValue().udiv(Factor)));
+        SmallVector<const SCEV *, 2> Operands;
+        Operands.push_back(LHSCst);
+        Operands.append(Mul->op_begin() + 1, Mul->op_end());
+        LHS = getMulExpr(Operands);
+        RHS = RHSCst;
+        Mul = dyn_cast<SCEVMulExpr>(LHS);
+        if (!Mul)
+          return getUDivExactExpr(LHS, RHS);
+      }
+    }
+  }
+
+  for (int i = 0, e = Mul->getNumOperands(); i != e; ++i) {
+    if (Mul->getOperand(i) == RHS) {
+      SmallVector<const SCEV *, 2> Operands;
+      Operands.append(Mul->op_begin(), Mul->op_begin() + i);
+      Operands.append(Mul->op_begin() + i + 1, Mul->op_end());
+      return getMulExpr(Operands);
+    }
+  }
+
+  return getUDivExpr(LHS, RHS);
+}
 
 /// getAddRecExpr - Get an add recurrence expression for the specified loop.
 /// Simplify the expression as much as possible.
@@ -3689,17 +3760,24 @@ const SCEV *ScalarEvolution::createSCEV(Value *V) {
       // Use ComputeMaskedBits to compute what ShrinkDemandedConstant
       // knew about to reconstruct a low-bits mask value.
       unsigned LZ = A.countLeadingZeros();
+      unsigned TZ = A.countTrailingZeros();
       unsigned BitWidth = A.getBitWidth();
       APInt KnownZero(BitWidth, 0), KnownOne(BitWidth, 0);
       ComputeMaskedBits(U->getOperand(0), KnownZero, KnownOne, TD);
 
-      APInt EffectiveMask = APInt::getLowBitsSet(BitWidth, BitWidth - LZ);
-
-      if (LZ != 0 && !((~A & ~KnownZero) & EffectiveMask))
-        return
-          getZeroExtendExpr(getTruncateExpr(getSCEV(U->getOperand(0)),
-                                IntegerType::get(getContext(), BitWidth - LZ)),
-                            U->getType());
+      APInt EffectiveMask =
+          APInt::getLowBitsSet(BitWidth, BitWidth - LZ - TZ).shl(TZ);
+      if ((LZ != 0 || TZ != 0) && !((~A & ~KnownZero) & EffectiveMask)) {
+        const SCEV *MulCount = getConstant(
+            ConstantInt::get(getContext(), APInt::getOneBitSet(BitWidth, TZ)));
+        return getMulExpr(
+            getZeroExtendExpr(
+                getTruncateExpr(
+                    getUDivExactExpr(getSCEV(U->getOperand(0)), MulCount),
+                    IntegerType::get(getContext(), BitWidth - LZ - TZ)),
+                U->getType()),
+            MulCount);
+      }
     }
     break;
 
@@ -4337,6 +4415,8 @@ ScalarEvolution::ComputeBackedgeTakenCount(const Loop *L) {
   // Examine all exits and pick the most conservative values.
   const SCEV *MaxBECount = getCouldNotCompute();
   bool CouldComputeBECount = true;
+  BasicBlock *Latch = L->getLoopLatch(); // may be NULL.
+  const SCEV *LatchMaxCount = 0;
   SmallVector<std::pair<BasicBlock *, const SCEV *>, 4> ExitCounts;
   for (unsigned i = 0, e = ExitingBlocks.size(); i != e; ++i) {
     ExitLimit EL = ComputeExitLimit(L, ExitingBlocks[i]);
@@ -4353,13 +4433,17 @@ ScalarEvolution::ComputeBackedgeTakenCount(const Loop *L) {
       // We cannot take the "min" MaxBECount, because non-unit stride loops may
       // skip some loop tests. Taking the max over the exits is sufficiently
       // conservative.  TODO: We could do better taking into consideration
-      // that (1) the loop has unit stride (2) the last loop test is
-      // less-than/greater-than (3) any loop test is less-than/greater-than AND
-      // falls-through some constant times less then the other tests.
-      MaxBECount = getUMaxFromMismatchedTypes(MaxBECount, EL.Max);
+      // non-latch exits that dominate the latch.
+      if (EL.MustExit && ExitingBlocks[i] == Latch)
+        LatchMaxCount = EL.Max;
+      else
+        MaxBECount = getUMaxFromMismatchedTypes(MaxBECount, EL.Max);
     }
   }
-
+  // Be more precise in the easy case of a loop latch that must exit.
+  if (LatchMaxCount) {
+    MaxBECount = getUMinFromMismatchedTypes(MaxBECount, LatchMaxCount);
+  }
   return BackedgeTakenInfo(ExitCounts, CouldComputeBECount, MaxBECount);
 }
 
@@ -4455,6 +4539,7 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
                                                IsSubExpr || EitherMayExit);
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
+      bool MustExit = false;
       if (EitherMayExit) {
         // Both conditions must be true for the loop to continue executing.
         // Choose the less conservative count.
@@ -4469,6 +4554,7 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
           MaxBECount = EL0.Max;
         else
           MaxBECount = getUMinFromMismatchedTypes(EL0.Max, EL1.Max);
+        MustExit = EL0.MustExit || EL1.MustExit;
       } else {
         // Both conditions must be true at the same time for the loop to exit.
         // For now, be conservative.
@@ -4477,9 +4563,10 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
           MaxBECount = EL0.Max;
         if (EL0.Exact == EL1.Exact)
           BECount = EL0.Exact;
+        MustExit = EL0.MustExit && EL1.MustExit;
       }
 
-      return ExitLimit(BECount, MaxBECount);
+      return ExitLimit(BECount, MaxBECount, MustExit);
     }
     if (BO->getOpcode() == Instruction::Or) {
       // Recurse on the operands of the or.
@@ -4490,6 +4577,7 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
                                                IsSubExpr || EitherMayExit);
       const SCEV *BECount = getCouldNotCompute();
       const SCEV *MaxBECount = getCouldNotCompute();
+      bool MustExit = false;
       if (EitherMayExit) {
         // Both conditions must be false for the loop to continue executing.
         // Choose the less conservative count.
@@ -4504,6 +4592,7 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
           MaxBECount = EL0.Max;
         else
           MaxBECount = getUMinFromMismatchedTypes(EL0.Max, EL1.Max);
+        MustExit = EL0.MustExit || EL1.MustExit;
       } else {
         // Both conditions must be false at the same time for the loop to exit.
         // For now, be conservative.
@@ -4512,9 +4601,10 @@ ScalarEvolution::ComputeExitLimitFromCond(const Loop *L,
           MaxBECount = EL0.Max;
         if (EL0.Exact == EL1.Exact)
           BECount = EL0.Exact;
+        MustExit = EL0.MustExit && EL1.MustExit;
       }
 
-      return ExitLimit(BECount, MaxBECount);
+      return ExitLimit(BECount, MaxBECount, MustExit);
     }
   }
 
@@ -5594,7 +5684,7 @@ ScalarEvolution::HowFarToZero(const SCEV *V, const Loop *L, bool IsSubExpr) {
     else
       MaxBECount = getConstant(CountDown ? CR.getUnsignedMax()
                                          : -CR.getUnsignedMin());
-    return ExitLimit(Distance, MaxBECount);
+    return ExitLimit(Distance, MaxBECount, /*MustExit=*/true);
   }
 
   // If the recurrence is known not to wraparound, unsigned divide computes the
@@ -5602,16 +5692,20 @@ ScalarEvolution::HowFarToZero(const SCEV *V, const Loop *L, bool IsSubExpr) {
   // that the value will either become zero (and thus the loop terminates), that
   // the loop will terminate through some other exit condition first, or that
   // the loop has undefined behavior.  This means we can't "miss" the exit
-  // value, even with nonunit stride.
+  // value, even with nonunit stride, and exit later via the same branch. Note
+  // that we can skip this exit if loop later exits via a different
+  // branch. Hence MustExit=false.
   //
   // This is only valid for expressions that directly compute the loop exit. It
   // is invalid for subexpressions in which the loop may exit through this
   // branch even if this subexpression is false. In that case, the trip count
   // computed by this udiv could be smaller than the number of well-defined
   // iterations.
-  if (!IsSubExpr && AddRec->getNoWrapFlags(SCEV::FlagNW))
-    return getUDivExpr(Distance, CountDown ? getNegativeSCEV(Step) : Step);
-
+  if (!IsSubExpr && AddRec->getNoWrapFlags(SCEV::FlagNW)) {
+    const SCEV *Exact =
+      getUDivExpr(Distance, CountDown ? getNegativeSCEV(Step) : Step);
+    return ExitLimit(Exact, Exact, /*MustExit=*/false);
+  }
   // Then, try to solve the above equation provided that Start is constant.
   if (const SCEVConstant *StartC = dyn_cast<SCEVConstant>(Start))
     return SolveLinEquationWithOverflow(StepC->getValue()->getValue(),
@@ -6475,7 +6569,7 @@ ScalarEvolution::HowManyLessThans(const SCEV *LHS, const SCEV *RHS,
   if (isa<SCEVCouldNotCompute>(MaxBECount))
     MaxBECount = BECount;
 
-  return ExitLimit(BECount, MaxBECount);
+  return ExitLimit(BECount, MaxBECount, /*MustExit=*/true);
 }
 
 ScalarEvolution::ExitLimit
@@ -6547,7 +6641,7 @@ ScalarEvolution::HowManyGreaterThans(const SCEV *LHS, const SCEV *RHS,
   if (isa<SCEVCouldNotCompute>(MaxBECount))
     MaxBECount = BECount;
 
-  return ExitLimit(BECount, MaxBECount);
+  return ExitLimit(BECount, MaxBECount, /*MustExit=*/true);
 }
 
 /// getNumIterationsInRange - Return the number of iterations of this loop that
@@ -6674,20 +6768,6 @@ const SCEV *SCEVAddRecExpr::getNumIterationsInRange(ConstantRange Range,
   }
 
   return SE.getCouldNotCompute();
-}
-
-static const APInt gcd(const SCEVConstant *C1, const SCEVConstant *C2) {
-  APInt A = C1->getValue()->getValue().abs();
-  APInt B = C2->getValue()->getValue().abs();
-  uint32_t ABW = A.getBitWidth();
-  uint32_t BBW = B.getBitWidth();
-
-  if (ABW > BBW)
-    B = B.zext(ABW);
-  else if (ABW < BBW)
-    A = A.zext(BBW);
-
-  return APIntOps::GreatestCommonDivisor(A, B);
 }
 
 static const APInt srem(const SCEVConstant *C1, const SCEVConstant *C2) {
@@ -7127,7 +7207,7 @@ SCEVAddRecExpr::delinearize(ScalarEvolution &SE,
   const SCEV *Start = this->getStart();
   const SCEV *Step = this->getStepRecurrence(SE);
 
-  // Build the SCEV representation of the cannonical induction variable in the
+  // Build the SCEV representation of the canonical induction variable in the
   // loop of this SCEV.
   const SCEV *Zero = SE.getConstant(this->getType(), 0);
   const SCEV *One = SE.getConstant(this->getType(), 1);
@@ -7173,13 +7253,13 @@ SCEVAddRecExpr::delinearize(ScalarEvolution &SE,
   else
     Rem = Quotient;
 
-  // Scale up the cannonical induction variable IV by whatever remains from the
+  // Scale up the canonical induction variable IV by whatever remains from the
   // Step after division by the GCD: the GCD is the size of all the sub-array.
   if (Step != GCD) {
     Step = SCEVDivision::divide(SE, Step, GCD);
     IV = SE.getMulExpr(IV, Step);
   }
-  // The access function in the current subscript is computed as the cannonical
+  // The access function in the current subscript is computed as the canonical
   // induction variable IV (potentially scaled up by the step) and offset by
   // Rem, the offset of delinearization in the sub-array.
   const SCEV *Index = SE.getAddExpr(IV, Rem);
@@ -7268,7 +7348,7 @@ bool ScalarEvolution::runOnFunction(Function &F) {
   LI = &getAnalysis<LoopInfo>();
   TD = getAnalysisIfAvailable<DataLayout>();
   TLI = &getAnalysis<TargetLibraryInfo>();
-  DT = &getAnalysis<DominatorTree>();
+  DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
   return false;
 }
 
@@ -7305,7 +7385,7 @@ void ScalarEvolution::releaseMemory() {
 void ScalarEvolution::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.setPreservesAll();
   AU.addRequiredTransitive<LoopInfo>();
-  AU.addRequiredTransitive<DominatorTree>();
+  AU.addRequiredTransitive<DominatorTreeWrapperPass>();
   AU.addRequired<TargetLibraryInfo>();
 }
 
@@ -7636,7 +7716,7 @@ void ScalarEvolution::forgetMemoizedResults(const SCEV *S) {
 
 typedef DenseMap<const Loop *, std::string> VerifyMap;
 
-/// replaceSubString - Replaces all occurences of From in Str with To.
+/// replaceSubString - Replaces all occurrences of From in Str with To.
 static void replaceSubString(std::string &Str, StringRef From, StringRef To) {
   size_t Pos = 0;
   while ((Pos = Str.find(From, Pos)) != std::string::npos) {
