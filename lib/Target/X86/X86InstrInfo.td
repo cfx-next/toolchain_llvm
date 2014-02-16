@@ -928,9 +928,9 @@ def trunc_su : PatFrag<(ops node:$src), (trunc node:$src), [{
 // Nop
 let neverHasSideEffects = 1, SchedRW = [WriteZero] in {
   def NOOP : I<0x90, RawFrm, (outs), (ins), "nop", [], IIC_NOP>;
-  def NOOPW : I<0x1f, MRM0m, (outs), (ins i16mem:$zero),
+  def NOOPW : I<0x1f, MRMXm, (outs), (ins i16mem:$zero),
                 "nop{w}\t$zero", [], IIC_NOP>, TB, OpSize16;
-  def NOOPL : I<0x1f, MRM0m, (outs), (ins i32mem:$zero),
+  def NOOPL : I<0x1f, MRMXm, (outs), (ins i32mem:$zero),
                 "nop{l}\t$zero", [], IIC_NOP>, TB, OpSize32;
 }
 
@@ -1203,12 +1203,24 @@ def MOV16ri : Ii16<0xB8, AddRegFrm, (outs GR16:$dst), (ins i16imm:$src),
 def MOV32ri : Ii32<0xB8, AddRegFrm, (outs GR32:$dst), (ins i32imm:$src),
                    "mov{l}\t{$src, $dst|$dst, $src}",
                    [(set GR32:$dst, imm:$src)], IIC_MOV>, OpSize32;
-def MOV64ri : RIi64<0xB8, AddRegFrm, (outs GR64:$dst), (ins i64imm:$src),
-                    "movabs{q}\t{$src, $dst|$dst, $src}",
-                    [(set GR64:$dst, imm:$src)], IIC_MOV>;
 def MOV64ri32 : RIi32S<0xC7, MRM0r, (outs GR64:$dst), (ins i64i32imm:$src),
                        "mov{q}\t{$src, $dst|$dst, $src}",
                        [(set GR64:$dst, i64immSExt32:$src)], IIC_MOV>;
+}
+let isReMaterializable = 1 in {
+def MOV64ri : RIi64<0xB8, AddRegFrm, (outs GR64:$dst), (ins i64imm:$src),
+                    "movabs{q}\t{$src, $dst|$dst, $src}",
+                    [(set GR64:$dst, imm:$src)], IIC_MOV>;
+}
+
+// Longer forms that use a ModR/M byte. Needed for disassembler
+let isCodeGenOnly = 1, ForceDisassemble = 1, hasSideEffects = 0 in {
+def MOV8ri_alt  : Ii8 <0xC6, MRM0r, (outs GR8 :$dst), (ins i8imm :$src),
+                   "mov{b}\t{$src, $dst|$dst, $src}", [], IIC_MOV>;
+def MOV16ri_alt : Ii16<0xC7, MRM0r, (outs GR16:$dst), (ins i16imm:$src),
+                   "mov{w}\t{$src, $dst|$dst, $src}", [], IIC_MOV>, OpSize16;
+def MOV32ri_alt : Ii32<0xC7, MRM0r, (outs GR32:$dst), (ins i32imm:$src),
+                   "mov{l}\t{$src, $dst|$dst, $src}", [], IIC_MOV>, OpSize32;
 }
 } // SchedRW
 

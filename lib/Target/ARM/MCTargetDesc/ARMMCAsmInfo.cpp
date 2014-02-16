@@ -23,11 +23,6 @@ EnableARMEHABI("arm-enable-ehabi", cl::Hidden,
   cl::ZeroOrMore,
   cl::desc("Generate ARM EHABI tables"),
 
-DisableARMEHABI("arm-disable-ehabi", cl::Hidden,
-  cl::desc("Disable ARM experimental exception handling"),
-  cl::init(false));
-
-
 void ARMMCAsmInfoDarwin::anchor() { }
 
 ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
@@ -41,6 +36,8 @@ ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
 
   // Exceptions handling
   ExceptionsType = ExceptionHandling::SjLj;
+
+  UseIntegratedAssembler = true;
 }
 
 void ARMELFMCAsmInfo::anchor() { }
@@ -58,9 +55,10 @@ ARMELFMCAsmInfo::ARMELFMCAsmInfo() {
   SupportsDebugInformation = true;
 
   // Exceptions handling
-  if (!DisableARMEHABI)
-    ExceptionsType = ExceptionHandling::ARM;
+  ExceptionsType = ExceptionHandling::ARM;
 
   // foo(plt) instead of foo@plt
   UseParensForSymbolVariant = true;
+
+  UseIntegratedAssembler = true;
 }

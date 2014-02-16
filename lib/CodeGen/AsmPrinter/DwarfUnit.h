@@ -31,6 +31,7 @@ class MachineOperand;
 class ConstantInt;
 class ConstantFP;
 class DbgVariable;
+class DwarfCompileUnit;
 
 // Data structure to hold a range for range lists.
 class RangeSpan {
@@ -361,6 +362,8 @@ public:
 
   /// addSourceLine - Add location information to specified debug information
   /// entry.
+  void addSourceLine(DIE *Die, unsigned Line, StringRef File,
+                     StringRef Directory);
   void addSourceLine(DIE *Die, DIVariable V);
   void addSourceLine(DIE *Die, DIGlobalVariable G);
   void addSourceLine(DIE *Die, DISubprogram SP);
@@ -460,6 +463,8 @@ public:
   virtual void emitHeader(const MCSection *ASection,
                           const MCSymbol *ASectionSym) const;
 
+  virtual DwarfCompileUnit &getCU() = 0;
+
 protected:
   /// getOrCreateStaticMemberDIE - Create new static data member DIE.
   DIE *getOrCreateStaticMemberDIE(DIDerivedType DT);
@@ -534,10 +539,18 @@ private:
 };
 
 class DwarfCompileUnit : public DwarfUnit {
+  /// The attribute index of DW_AT_stmt_list in the compile unit DIE, avoiding
+  /// the need to search for it in applyStmtList.
+  unsigned stmtListIndex;
+
 public:
   DwarfCompileUnit(unsigned UID, DIE *D, DICompileUnit Node, AsmPrinter *A,
                    DwarfDebug *DW, DwarfFile *DWU);
-  virtual ~DwarfCompileUnit() LLVM_OVERRIDE;
+
+  void initStmtList(MCSymbol *DwarfLineSectionSym);
+
+  /// Apply the DW_AT_stmt_list from this compile unit to the specified DIE.
+  void applyStmtList(DIE &D);
 
   /// createGlobalVariableDIE - create global variable DIE.
   void createGlobalVariableDIE(DIGlobalVariable GV);
@@ -545,17 +558,19 @@ public:
   /// addLabelAddress - Add a dwarf label attribute data and value using
   /// either DW_FORM_addr or DW_FORM_GNU_addr_index.
   void addLabelAddress(DIE *Die, dwarf::Attribute Attribute, MCSymbol *Label);
+
+  DwarfCompileUnit &getCU() LLVM_OVERRIDE { return *this; }
 };
 
 class DwarfTypeUnit : public DwarfUnit {
 private:
   uint64_t TypeSignature;
   const DIE *Ty;
+  DwarfCompileUnit &CU;
 
 public:
-  DwarfTypeUnit(unsigned UID, DIE *D, DICompileUnit CUNode, AsmPrinter *A,
+  DwarfTypeUnit(unsigned UID, DIE *D, DwarfCompileUnit &CU, AsmPrinter *A,
                 DwarfDebug *DW, DwarfFile *DWU);
-  virtual ~DwarfTypeUnit() LLVM_OVERRIDE;
 
   void setTypeSignature(uint64_t Signature) { TypeSignature = Signature; }
   uint64_t getTypeSignature() const { return TypeSignature; }
@@ -569,6 +584,7 @@ public:
            sizeof(uint32_t);                               // Type DIE Offset
   }
   void initSection(const MCSection *Section);
+  DwarfCompileUnit &getCU() LLVM_OVERRIDE { return CU; }
 };
 } // end llvm namespace
 #endif
