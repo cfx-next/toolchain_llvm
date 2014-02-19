@@ -16,13 +16,6 @@
 
 using namespace llvm;
 
-// ARM EHABI is experimental but the quality is good enough
-// to be turned on by default on non-Darwin ARM targets.
-cl::opt<bool>
-EnableARMEHABI("arm-enable-ehabi", cl::Hidden,
-  cl::ZeroOrMore,
-  cl::desc("Generate ARM EHABI tables"),
-
 void ARMMCAsmInfoDarwin::anchor() { }
 
 ARMMCAsmInfoDarwin::ARMMCAsmInfoDarwin() {
