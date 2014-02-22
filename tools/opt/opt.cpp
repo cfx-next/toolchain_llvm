@@ -22,6 +22,7 @@
 #include "llvm/Analysis/RegionPass.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/CodeGen/CommandFlags.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/IRPrintingPasses.h"
 #include "llvm/IR/LLVMContext.h"
@@ -340,6 +341,9 @@ int main(int argc, char **argv) {
   initializeInstCombine(Registry);
   initializeInstrumentation(Registry);
   initializeTarget(Registry);
+  // For codegen passes, only passes that do IR to IR transformation are
+  // supported. For now, just add CodeGenPrepare.
+  initializeCodeGenPreparePass(Registry);
 
   cl::ParseCommandLineOptions(argc, argv,
     "llvm .bc -> .bc modular optimizer and analysis printer\n");
@@ -425,15 +429,15 @@ int main(int argc, char **argv) {
   Passes.add(TLI);
 
   // Add an appropriate DataLayout instance for this module.
-  DataLayout *TD = 0;
+  DataLayout *DL = 0;
   const std::string &ModuleDataLayout = M.get()->getDataLayout();
   if (!ModuleDataLayout.empty())
-    TD = new DataLayout(ModuleDataLayout);
+    DL = new DataLayout(ModuleDataLayout);
   else if (!DefaultDataLayout.empty())
-    TD = new DataLayout(DefaultDataLayout);
+    DL = new DataLayout(DefaultDataLayout);
 
-  if (TD)
-    Passes.add(TD);
+  if (DL)
+    Passes.add(DL);
 
   Triple ModuleTriple(M->getTargetTriple());
   TargetMachine *Machine = 0;
@@ -448,8 +452,8 @@ int main(int argc, char **argv) {
   OwningPtr<FunctionPassManager> FPasses;
   if (OptLevelO1 || OptLevelO2 || OptLevelOs || OptLevelOz || OptLevelO3) {
     FPasses.reset(new FunctionPassManager(M.get()));
-    if (TD)
-      FPasses->add(new DataLayout(*TD));
+    if (DL)
+      FPasses->add(new DataLayout(*DL));
     if (TM.get())
       TM->addAnalysisPasses(*FPasses);
 

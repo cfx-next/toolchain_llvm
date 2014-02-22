@@ -14,7 +14,7 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "codegenprepare"
-#include "llvm/Transforms/Scalar.h"
+#include "llvm/CodeGen/Passes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
@@ -1756,7 +1756,12 @@ AddressingModeMatcher::IsPromotionProfitable(unsigned MatchedSize,
   Instruction *PromotedInst = dyn_cast<Instruction>(PromotedOperand);
   if (!PromotedInst)
     return false;
-  return TLI.isOperationLegalOrCustom(PromotedInst->getOpcode(),
+  int ISDOpcode = TLI.InstructionOpcodeToISD(PromotedInst->getOpcode());
+  // If the ISDOpcode is undefined, it was undefined before the promotion.
+  if (!ISDOpcode)
+    return true;
+  // Otherwise, check if the promoted instruction is legal or not.
+  return TLI.isOperationLegalOrCustom(ISDOpcode,
                                       EVT::getEVT(PromotedInst->getType()));
 }
 
