@@ -91,7 +91,7 @@ namespace {
                                const GlobalStatus &GS);
     bool OptimizeEmptyGlobalCXXDtors(Function *CXAAtExitFn);
 
-    DataLayout *DL;
+    const DataLayout *DL;
     TargetLibraryInfo *TLI;
   };
 }
@@ -273,7 +273,8 @@ static bool CleanupPointerRootUsers(GlobalVariable *GV,
 /// quick scan over the use list to clean up the easy and obvious cruft.  This
 /// returns true if it made a change.
 static bool CleanupConstantGlobalUsers(Value *V, Constant *Init,
-                                       DataLayout *DL, TargetLibraryInfo *TLI) {
+                                       const DataLayout *DL,
+                                       TargetLibraryInfo *TLI) {
   bool Changed = false;
   // Note that we need to use a weak value handle for the worklist items. When
   // we delete a constant array, we may also be holding pointer to one of its
@@ -750,7 +751,7 @@ static bool OptimizeAwayTrappingUsesOfValue(Value *V, Constant *NewV) {
 /// if the loaded value is dynamically null, then we know that they cannot be
 /// reachable with a null optimize away the load.
 static bool OptimizeAwayTrappingUsesOfLoads(GlobalVariable *GV, Constant *LV,
-                                            DataLayout *DL,
+                                            const DataLayout *DL,
                                             TargetLibraryInfo *TLI) {
   bool Changed = false;
 
@@ -813,8 +814,8 @@ static bool OptimizeAwayTrappingUsesOfLoads(GlobalVariable *GV, Constant *LV,
 
 /// ConstantPropUsersOf - Walk the use list of V, constant folding all of the
 /// instructions that are foldable.
-static void ConstantPropUsersOf(Value *V,
-                                DataLayout *DL, TargetLibraryInfo *TLI) {
+static void ConstantPropUsersOf(Value *V, const DataLayout *DL,
+                                TargetLibraryInfo *TLI) {
   for (Value::use_iterator UI = V->use_begin(), E = V->use_end(); UI != E; )
     if (Instruction *I = dyn_cast<Instruction>(*UI++))
       if (Constant *NewC = ConstantFoldInstruction(I, DL, TLI)) {
@@ -837,7 +838,7 @@ static GlobalVariable *OptimizeGlobalAddressOfMalloc(GlobalVariable *GV,
                                                      CallInst *CI,
                                                      Type *AllocTy,
                                                      ConstantInt *NElements,
-                                                     DataLayout *DL,
+                                                     const DataLayout *DL,
                                                      TargetLibraryInfo *TLI) {
   DEBUG(errs() << "PROMOTING GLOBAL: " << *GV << "  CALL = " << *CI << '\n');
 
@@ -1285,7 +1286,7 @@ static void RewriteUsesOfLoadForHeapSRoA(LoadInst *Load,
 /// PerformHeapAllocSRoA - CI is an allocation of an array of structures.  Break
 /// it up into multiple allocations of arrays of the fields.
 static GlobalVariable *PerformHeapAllocSRoA(GlobalVariable *GV, CallInst *CI,
-                                            Value *NElems, DataLayout *DL,
+                                            Value *NElems, const DataLayout *DL,
                                             const TargetLibraryInfo *TLI) {
   DEBUG(dbgs() << "SROA HEAP ALLOC: " << *GV << "  MALLOC = " << *CI << '\n');
   Type *MAT = getMallocAllocatedType(CI, TLI);
@@ -1477,7 +1478,7 @@ static bool TryToOptimizeStoreOfMallocToGlobal(GlobalVariable *GV,
                                                Type *AllocTy,
                                                AtomicOrdering Ordering,
                                                Module::global_iterator &GVI,
-                                               DataLayout *DL,
+                                               const DataLayout *DL,
                                                TargetLibraryInfo *TLI) {
   if (!DL)
     return false;
@@ -1576,7 +1577,8 @@ static bool TryToOptimizeStoreOfMallocToGlobal(GlobalVariable *GV,
 static bool OptimizeOnceStoredGlobal(GlobalVariable *GV, Value *StoredOnceVal,
                                      AtomicOrdering Ordering,
                                      Module::global_iterator &GVI,
-                                     DataLayout *DL, TargetLibraryInfo *TLI) {
+                                     const DataLayout *DL,
+                                     TargetLibraryInfo *TLI) {
   // Ignore no-op GEPs and bitcasts.
   StoredOnceVal = StoredOnceVal->stripPointerCasts();
 
@@ -1820,11 +1822,13 @@ bool GlobalOpt::ProcessInternalGlobal(GlobalVariable *GV,
     ++NumMarked;
     return true;
   } else if (!GV->getInitializer()->getType()->isSingleValueType()) {
-    if (DataLayout *DL = getAnalysisIfAvailable<DataLayout>())
-      if (GlobalVariable *FirstNewGV = SRAGlobal(GV, *DL)) {
+    if (DataLayoutPass *DLP = getAnalysisIfAvailable<DataLayoutPass>()) {
+      const DataLayout &DL = DLP->getDataLayout();
+      if (GlobalVariable *FirstNewGV = SRAGlobal(GV, DL)) {
         GVI = FirstNewGV;  // Don't skip the newly produced globals!
         return true;
       }
+    }
   } else if (GS.StoredType == GlobalStatus::StoredOnce) {
     // If the initial value for the global was an undef value, and if only
     // one other value was stored into it, we can just change the
@@ -3167,7 +3171,8 @@ bool GlobalOpt::OptimizeEmptyGlobalCXXDtors(Function *CXAAtExitFn) {
 bool GlobalOpt::runOnModule(Module &M) {
   bool Changed = false;
 
-  DL = getAnalysisIfAvailable<DataLayout>();
+  DataLayoutPass *DLP = getAnalysisIfAvailable<DataLayoutPass>();
+  DL = DLP ? &DLP->getDataLayout() : 0;
   TLI = &getAnalysis<TargetLibraryInfo>();
 
   // Try to find the llvm.globalctors list.

@@ -350,8 +350,8 @@ private:
     DK_REFERENCE, DK_WEAK_DEFINITION, DK_WEAK_REFERENCE,
     DK_WEAK_DEF_CAN_BE_HIDDEN, DK_COMM, DK_COMMON, DK_LCOMM, DK_ABORT,
     DK_INCLUDE, DK_INCBIN, DK_CODE16, DK_CODE16GCC, DK_REPT, DK_IRP, DK_IRPC,
-    DK_IF, DK_IFB, DK_IFNB, DK_IFC, DK_IFNC, DK_IFDEF, DK_IFNDEF, DK_IFNOTDEF,
-    DK_ELSEIF, DK_ELSE, DK_ENDIF,
+    DK_IF, DK_IFNE, DK_IFB, DK_IFNB, DK_IFC, DK_IFEQS, DK_IFNC, DK_IFDEF,
+    DK_IFNDEF, DK_IFNOTDEF, DK_ELSEIF, DK_ELSE, DK_ENDIF,
     DK_SPACE, DK_SKIP, DK_FILE, DK_LINE, DK_LOC, DK_STABS,
     DK_CFI_SECTIONS, DK_CFI_STARTPROC, DK_CFI_ENDPROC, DK_CFI_DEF_CFA,
     DK_CFI_DEF_CFA_OFFSET, DK_CFI_ADJUST_CFA_OFFSET, DK_CFI_DEF_CFA_REGISTER,
@@ -361,6 +361,7 @@ private:
     DK_CFI_REGISTER, DK_CFI_WINDOW_SAVE,
     DK_MACROS_ON, DK_MACROS_OFF, DK_MACRO, DK_ENDM, DK_ENDMACRO, DK_PURGEM,
     DK_SLEB128, DK_ULEB128,
+    DK_ERR, DK_ERROR,
     DK_END
   };
 
@@ -437,11 +438,14 @@ private:
   bool parseDirectiveInclude(); // ".include"
   bool parseDirectiveIncbin(); // ".incbin"
 
-  bool parseDirectiveIf(SMLoc DirectiveLoc); // ".if"
+  // ".if" or ".ifne"
+  bool parseDirectiveIf(SMLoc DirectiveLoc);
   // ".ifb" or ".ifnb", depending on ExpectBlank.
   bool parseDirectiveIfb(SMLoc DirectiveLoc, bool ExpectBlank);
   // ".ifc" or ".ifnc", depending on ExpectEqual.
   bool parseDirectiveIfc(SMLoc DirectiveLoc, bool ExpectEqual);
+  // ".ifeqs"
+  bool parseDirectiveIfeqs(SMLoc DirectiveLoc);
   // ".ifdef" or ".ifndef", depending on expect_defined
   bool parseDirectiveIfdef(SMLoc DirectiveLoc, bool expect_defined);
   bool parseDirectiveElseIf(SMLoc DirectiveLoc); // ".elseif"
@@ -470,6 +474,9 @@ private:
 
   // "end"
   bool parseDirectiveEnd(SMLoc DirectiveLoc);
+
+  // ".err" or ".error"
+  bool parseDirectiveError(SMLoc DirectiveLoc, bool WithMessage);
 
   void initializeDirectiveKindMap();
 };
@@ -1226,6 +1233,7 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info) {
   default:
     break;
   case DK_IF:
+  case DK_IFNE:
     return parseDirectiveIf(IDLoc);
   case DK_IFB:
     return parseDirectiveIfb(IDLoc, true);
@@ -1233,6 +1241,8 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info) {
     return parseDirectiveIfb(IDLoc, false);
   case DK_IFC:
     return parseDirectiveIfc(IDLoc, true);
+  case DK_IFEQS:
+    return parseDirectiveIfeqs(IDLoc);
   case DK_IFNC:
     return parseDirectiveIfc(IDLoc, false);
   case DK_IFDEF:
@@ -1526,6 +1536,10 @@ bool AsmParser::parseStatement(ParseStatementInfo &Info) {
       return parseDirectivePurgeMacro(IDLoc);
     case DK_END:
       return parseDirectiveEnd(IDLoc);
+    case DK_ERR:
+      return parseDirectiveError(IDLoc, false);
+    case DK_ERROR:
+      return parseDirectiveError(IDLoc, true);
     }
 
     return Error(IDLoc, "unknown directive");
@@ -3760,6 +3774,7 @@ bool AsmParser::parseDirectiveIncbin() {
 
 /// parseDirectiveIf
 /// ::= .if expression
+/// ::= .ifne expression
 bool AsmParser::parseDirectiveIf(SMLoc DirectiveLoc) {
   TheCondStack.push_back(TheCondState);
   TheCondState.TheCond = AsmCond::IfCond;
@@ -3807,6 +3822,7 @@ bool AsmParser::parseDirectiveIfb(SMLoc DirectiveLoc, bool ExpectBlank) {
 
 /// parseDirectiveIfc
 /// ::= .ifc string1, string2
+/// ::= .ifnc string1, string2
 bool AsmParser::parseDirectiveIfc(SMLoc DirectiveLoc, bool ExpectEqual) {
   TheCondStack.push_back(TheCondState);
   TheCondState.TheCond = AsmCond::IfCond;
@@ -3828,9 +3844,46 @@ bool AsmParser::parseDirectiveIfc(SMLoc DirectiveLoc, bool ExpectEqual) {
 
     Lex();
 
-    TheCondState.CondMet = ExpectEqual == (Str1 == Str2);
+    TheCondState.CondMet = ExpectEqual == (Str1.trim() == Str2.trim());
     TheCondState.Ignore = !TheCondState.CondMet;
   }
+
+  return false;
+}
+
+/// parseDirectiveIfeqs
+///   ::= .ifeqs string1, string2
+bool AsmParser::parseDirectiveIfeqs(SMLoc DirectiveLoc) {
+  if (Lexer.isNot(AsmToken::String)) {
+    TokError("expected string parameter for '.ifeqs' directive");
+    eatToEndOfStatement();
+    return true;
+  }
+
+  StringRef String1 = getTok().getStringContents();
+  Lex();
+
+  if (Lexer.isNot(AsmToken::Comma)) {
+    TokError("expected comma after first string for '.ifeqs' directive");
+    eatToEndOfStatement();
+    return true;
+  }
+
+  Lex();
+
+  if (Lexer.isNot(AsmToken::String)) {
+    TokError("expected string parameter for '.ifeqs' directive");
+    eatToEndOfStatement();
+    return true;
+  }
+
+  StringRef String2 = getTok().getStringContents();
+  Lex();
+
+  TheCondStack.push_back(TheCondState);
+  TheCondState.TheCond = AsmCond::IfCond;
+  TheCondState.CondMet = String1 == String2;
+  TheCondState.Ignore = !TheCondState.CondMet;
 
   return false;
 }
@@ -3931,6 +3984,36 @@ bool AsmParser::parseDirectiveEnd(SMLoc DirectiveLoc) {
   return false;
 }
 
+/// parseDirectiveError
+///   ::= .err
+///   ::= .error [string]
+bool AsmParser::parseDirectiveError(SMLoc L, bool WithMessage) {
+  if (!TheCondStack.empty()) {
+    if (TheCondStack.back().Ignore) {
+      eatToEndOfStatement();
+      return false;
+    }
+  }
+
+  if (!WithMessage)
+    return Error(L, ".err encountered");
+
+  StringRef Message = ".error directive invoked in source file";
+  if (Lexer.isNot(AsmToken::EndOfStatement)) {
+    if (Lexer.isNot(AsmToken::String)) {
+      TokError(".error argument must be a string");
+      eatToEndOfStatement();
+      return true;
+    }
+
+    Message = getTok().getStringContents();
+    Lex();
+  }
+
+  Error(L, Message);
+  return true;
+}
+
 /// parseDirectiveEndIf
 /// ::= .endif
 bool AsmParser::parseDirectiveEndIf(SMLoc DirectiveLoc) {
@@ -4009,9 +4092,11 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".bundle_lock"] = DK_BUNDLE_LOCK;
   DirectiveKindMap[".bundle_unlock"] = DK_BUNDLE_UNLOCK;
   DirectiveKindMap[".if"] = DK_IF;
+  DirectiveKindMap[".ifne"] = DK_IFNE;
   DirectiveKindMap[".ifb"] = DK_IFB;
   DirectiveKindMap[".ifnb"] = DK_IFNB;
   DirectiveKindMap[".ifc"] = DK_IFC;
+  DirectiveKindMap[".ifeqs"] = DK_IFEQS;
   DirectiveKindMap[".ifnc"] = DK_IFNC;
   DirectiveKindMap[".ifdef"] = DK_IFDEF;
   DirectiveKindMap[".ifndef"] = DK_IFNDEF;
@@ -4054,6 +4139,8 @@ void AsmParser::initializeDirectiveKindMap() {
   DirectiveKindMap[".endm"] = DK_ENDM;
   DirectiveKindMap[".endmacro"] = DK_ENDMACRO;
   DirectiveKindMap[".purgem"] = DK_PURGEM;
+  DirectiveKindMap[".err"] = DK_ERR;
+  DirectiveKindMap[".error"] = DK_ERROR;
 }
 
 MCAsmMacro *AsmParser::parseMacroLikeBody(SMLoc DirectiveLoc) {

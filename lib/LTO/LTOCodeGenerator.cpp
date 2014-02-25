@@ -191,7 +191,7 @@ bool LTOCodeGenerator::writeMergedModules(const char *path,
 
   // create output file
   std::string ErrInfo;
-  tool_output_file Out(path, ErrInfo, sys::fs::F_Binary);
+  tool_output_file Out(path, ErrInfo, sys::fs::F_None);
   if (!ErrInfo.empty()) {
     errMsg = "could not open bitcode file for writing: ";
     errMsg += path;
@@ -482,7 +482,7 @@ bool LTOCodeGenerator::generateObjectFile(raw_ostream &out,
   passes.add(createVerifierPass());
 
   // Add an appropriate DataLayout instance for this module...
-  passes.add(new DataLayout(*TargetMach->getDataLayout()));
+  passes.add(new DataLayoutPass(*TargetMach->getDataLayout()));
 
   // Add appropriate TargetLibraryInfo for this module.
   passes.add(new TargetLibraryInfo(Triple(TargetMach->getTargetTriple())));
@@ -503,7 +503,7 @@ bool LTOCodeGenerator::generateObjectFile(raw_ostream &out,
 
   PassManager codeGenPasses;
 
-  codeGenPasses.add(new DataLayout(*TargetMach->getDataLayout()));
+  codeGenPasses.add(new DataLayoutPass(*TargetMach->getDataLayout()));
 
   formatted_raw_ostream Out(out);
 
