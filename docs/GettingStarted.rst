@@ -182,7 +182,7 @@ Package                                                     Version      Notes
    #. If you want to make changes to the configure scripts, you will need GNU
       autoconf (2.60), and consequently, GNU M4 (version 1.4 or higher). You
       will also need automake (1.9.6). We only use aclocal from that package.
-   #. Optional, adds compression/uncompression capabilities to selected LLVM
+   #. Optional, adds compression / uncompression capabilities to selected LLVM
       tools.
 
 Additionally, your compilation host is expected to have the usual plethora of
@@ -275,6 +275,76 @@ contained `a bug <http://gcc.gnu.org/bugzilla/show_bug.cgi?id=53841>`__ which
 causes Clang to refuse to compile condition_variable header file.  At the time
 of writing, this breaks LLD build.
 
+Getting a Modern Host C++ Toolchain
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+This section mostly applies to Linux and older BSDs. On Mac OS X, you should
+have a sufficiently modern Xcode, or you will likely need to upgrade until you
+do. On Windows, just use Visual Studio 2012 as the host compiler, it is
+explicitly supported and widely available. FreeBSD 10.0 and newer have a modern
+Clang as the system compiler.
+
+However, some Linux distributions and some other or older BSDs sometimes have
+extremely old versions of GCC. These steps attempt to help you upgrade you
+compiler even on such a system. However, if at all possible, we encourage you
+to use a recent version of a distribution with a modern system compiler that
+meets these requirements. Note that it is tempting to to install a prior
+version of Clang and libc++ to be the host compiler, however libc++ was not
+well tested or set up to build on Linux until relatively recently. As
+a consequence, this guide suggests just using libstdc++ and a modern GCC as the
+initial host in a bootstrap, and then using Clang (and potentially libc++).
+
+The first step is to get a recent GCC toolchain installed. The most common
+distribution on which users have struggled with the version requirements is
+Ubuntu Precise, 12.04 LTS. For this distribution, one easy option is to install
+the `toolchain testing PPA`_ and use it to install a modern GCC. There is
+a really nice discussions of this on the `ask ubuntu stack exchange`_. However,
+not all users can use PPAs and there are many other distributions, so it may be
+necessary (or just useful, if you're here you *are* doing compiler development
+after all) to build and install GCC from source. It is also quite easy to do
+these days.
+
+.. _toolchain testing PPA:
+  https://launchpad.net/~ubuntu-toolchain-r/+archive/test
+.. _ask ubuntu stack exchange:
+  http://askubuntu.com/questions/271388/how-to-install-gcc-4-8-in-ubuntu-12-04-from-the-terminal
+
+Easy steps for installing GCC 4.8.2:
+
+.. code-block:: console
+
+  % wget ftp://ftp.gnu.org/gnu/gcc/gcc-4.8.2/gcc-4.8.2.tar.bz2
+  % tar -xvjf gcc-4.8.2.tar.bz2
+  % cd gcc-4.8.2
+  % ./contrib/download_prerequisites
+  % cd ..
+  % mkdir gcc-4.8.2-build
+  % cd gcc-4.8.2-build
+  % $PWD/../gcc-4.8.2/configure --prefix=$HOME/toolchains --enable-languages=c,c++
+  % make -j$(nproc)
+  % make install
+
+For more details, check out the excellent `GCC wiki entry`_, where I got most
+of this information from.
+
+.. _GCC wiki entry:
+  http://gcc.gnu.org/wiki/InstallingGCC
+
+Once you have a GCC toolchain, use it as your host compiler. Things should
+generally "just work". You may need to pass a special linker flag,
+``-Wl,-rpath,$HOME/toolchains/lib`` or some variant thereof to get things to
+find the libstdc++ DSO in this toolchain.
+
+When you build Clang, you will need to give *it* access to modern C++11
+standard library in order to use it as your new host in part of a bootstrap.
+There are two easy ways to do this, either build (and install) libc++ along
+with Clang and then use it with the ``-stdlib=libc++`` compile and link flag,
+or install Clang into the same prefix (``$HOME/toolchains`` above) as GCC.
+Clang will look within its own prefix for libstdc++ and use it if found. You
+can also add an explicit prefix for Clang to look in for a GCC toolchain with
+the ``--gcc-toolchain=/opt/my/gcc/prefix`` flag, passing it to both compile and
+link commands when using your just-built-Clang to bootstrap.
+
 .. _Getting Started with LLVM:
 
 Getting Started with LLVM
@@ -363,6 +433,7 @@ you can checkout it from the '``tags``' directory (instead of '``trunk``'). The
 following releases are located in the following subdirectories of the '``tags``'
 directory:
 
+* Release 3.4: **RELEASE_34/final**
 * Release 3.3: **RELEASE_33/final**
 * Release 3.2: **RELEASE_32/final**
 * Release 3.1: **RELEASE_31/final**

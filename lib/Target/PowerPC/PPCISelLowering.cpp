@@ -100,12 +100,17 @@ PPCTargetLowering::PPCTargetLowering(PPCTargetMachine &TM)
   if (Subtarget->useCRBits()) {
     setOperationAction(ISD::SIGN_EXTEND_INREG, MVT::i1, Expand);
 
-    setOperationAction(ISD::SINT_TO_FP, MVT::i1, Promote);
-    AddPromotedToType (ISD::SINT_TO_FP, MVT::i1,
-                       isPPC64 ? MVT::i64 : MVT::i32);
-    setOperationAction(ISD::UINT_TO_FP, MVT::i1, Promote);
-    AddPromotedToType (ISD::UINT_TO_FP, MVT::i1, 
-                       isPPC64 ? MVT::i64 : MVT::i32);
+    if (isPPC64 || Subtarget->hasFPCVT()) {
+      setOperationAction(ISD::SINT_TO_FP, MVT::i1, Promote);
+      AddPromotedToType (ISD::SINT_TO_FP, MVT::i1,
+                         isPPC64 ? MVT::i64 : MVT::i32);
+      setOperationAction(ISD::UINT_TO_FP, MVT::i1, Promote);
+      AddPromotedToType (ISD::UINT_TO_FP, MVT::i1, 
+                         isPPC64 ? MVT::i64 : MVT::i32);
+    } else {
+      setOperationAction(ISD::SINT_TO_FP, MVT::i1, Custom);
+      setOperationAction(ISD::UINT_TO_FP, MVT::i1, Custom);
+    }
 
     // PowerPC does not support direct load / store of condition registers
     setOperationAction(ISD::LOAD, MVT::i1, Custom);
@@ -563,10 +568,11 @@ PPCTargetLowering::PPCTargetLowering(PPCTargetMachine &TM)
   setTargetDAGCombine(ISD::BSWAP);
   setTargetDAGCombine(ISD::INTRINSIC_WO_CHAIN);
 
+  setTargetDAGCombine(ISD::SIGN_EXTEND);
+  setTargetDAGCombine(ISD::ZERO_EXTEND);
+  setTargetDAGCombine(ISD::ANY_EXTEND);
+
   if (Subtarget->useCRBits()) {
-    setTargetDAGCombine(ISD::SIGN_EXTEND);
-    setTargetDAGCombine(ISD::ZERO_EXTEND);
-    setTargetDAGCombine(ISD::ANY_EXTEND);
     setTargetDAGCombine(ISD::TRUNCATE);
     setTargetDAGCombine(ISD::SETCC);
     setTargetDAGCombine(ISD::SELECT_CC);
@@ -2771,6 +2777,10 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
         if (GPR_idx != Num_GPR_Regs) {
           unsigned VReg = MF.addLiveIn(GPR[GPR_idx], &PPC::GPRCRegClass);
           ArgVal = DAG.getCopyFromReg(Chain, dl, VReg, MVT::i32);
+
+          if (ObjectVT == MVT::i1)
+            ArgVal = DAG.getNode(ISD::TRUNCATE, dl, MVT::i1, ArgVal);
+
           ++GPR_idx;
         } else {
           needsLoad = true;
@@ -3767,6 +3777,9 @@ PPCTargetLowering::LowerCall_32SVR4(SDValue Chain, SDValue Callee,
     }
 
     if (VA.isRegLoc()) {
+      if (Arg.getValueType() == MVT::i1)
+        Arg = DAG.getNode(ISD::ZERO_EXTEND, dl, MVT::i32, Arg);
+
       seenFloatArg |= VA.getLocVT().isFloatingPoint();
       // Put argument in a physical register.
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), Arg));
@@ -4405,6 +4418,9 @@ PPCTargetLowering::LowerCall_Darwin(SDValue Chain, SDValue Callee,
     case MVT::i32:
     case MVT::i64:
       if (GPR_idx != NumGPRs) {
+        if (Arg.getValueType() == MVT::i1)
+          Arg = DAG.getNode(ISD::ZERO_EXTEND, dl, PtrVT, Arg);
+
         RegsToPass.push_back(std::make_pair(GPR[GPR_idx++], Arg));
       } else {
         LowerMemOpCallTo(DAG, MF, Chain, Arg, PtrOff, SPDiff, ArgOffset,
@@ -4970,6 +4986,11 @@ SDValue PPCTargetLowering::LowerINT_TO_FP(SDValue Op,
   // Don't handle ppc_fp128 here; let it be lowered to a libcall.
   if (Op.getValueType() != MVT::f32 && Op.getValueType() != MVT::f64)
     return SDValue();
+
+  if (Op.getOperand(0).getValueType() == MVT::i1)
+    return DAG.getNode(ISD::SELECT, dl, Op.getValueType(), Op.getOperand(0),
+                       DAG.getConstantFP(1.0, Op.getValueType()),
+                       DAG.getConstantFP(0.0, Op.getValueType()));
 
   assert((Op.getOpcode() == ISD::SINT_TO_FP || PPCSubTarget.hasFPCVT()) &&
          "UINT_TO_FP is supported only with FPCVT");
@@ -6030,8 +6051,7 @@ PPCTargetLowering::EmitAtomicBinary(MachineInstr *MI, MachineBasicBlock *BB,
   F->insert(It, loopMBB);
   F->insert(It, exitMBB);
   exitMBB->splice(exitMBB->begin(), BB,
-                  llvm::next(MachineBasicBlock::iterator(MI)),
-                  BB->end());
+                  std::next(MachineBasicBlock::iterator(MI)), BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
   MachineRegisterInfo &RegInfo = F->getRegInfo();
@@ -6099,8 +6119,7 @@ PPCTargetLowering::EmitPartwordAtomicBinary(MachineInstr *MI,
   F->insert(It, loopMBB);
   F->insert(It, exitMBB);
   exitMBB->splice(exitMBB->begin(), BB,
-                  llvm::next(MachineBasicBlock::iterator(MI)),
-                  BB->end());
+                  std::next(MachineBasicBlock::iterator(MI)), BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
   MachineRegisterInfo &RegInfo = F->getRegInfo();
@@ -6252,7 +6271,7 @@ PPCTargetLowering::emitEHSjLjSetJmp(MachineInstr *MI,
 
   // Transfer the remainder of BB and its successor edges to sinkMBB.
   sinkMBB->splice(sinkMBB->begin(), MBB,
-                  llvm::next(MachineBasicBlock::iterator(MI)), MBB->end());
+                  std::next(MachineBasicBlock::iterator(MI)), MBB->end());
   sinkMBB->transferSuccessorsAndUpdatePHIs(MBB);
 
   // Note that the structure of the jmp_buf used here is not compatible
@@ -6517,8 +6536,7 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
 
     // Transfer the remainder of BB and its successor edges to sinkMBB.
     sinkMBB->splice(sinkMBB->begin(), BB,
-                    llvm::next(MachineBasicBlock::iterator(MI)),
-                    BB->end());
+                    std::next(MachineBasicBlock::iterator(MI)), BB->end());
     sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
 
     // Next, add the true and fallthrough blocks as its successors.
@@ -6638,8 +6656,7 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     F->insert(It, midMBB);
     F->insert(It, exitMBB);
     exitMBB->splice(exitMBB->begin(), BB,
-                    llvm::next(MachineBasicBlock::iterator(MI)),
-                    BB->end());
+                    std::next(MachineBasicBlock::iterator(MI)), BB->end());
     exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
     //  thisMBB:
@@ -6709,8 +6726,7 @@ PPCTargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
     F->insert(It, midMBB);
     F->insert(It, exitMBB);
     exitMBB->splice(exitMBB->begin(), BB,
-                    llvm::next(MachineBasicBlock::iterator(MI)),
-                    BB->end());
+                    std::next(MachineBasicBlock::iterator(MI)), BB->end());
     exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
     MachineRegisterInfo &RegInfo = F->getRegInfo();
@@ -7294,6 +7310,20 @@ SDValue PPCTargetLowering::DAGCombineTruncBoolExt(SDNode *N,
       SDNode *User = *UI;
       if (User != N && !Visited.count(User))
         return SDValue();
+
+      // Make sure that we're not going to promote the non-output-value
+      // operand(s) or SELECT or SELECT_CC.
+      // FIXME: Although we could sometimes handle this, and it does occur in
+      // practice that one of the condition inputs to the select is also one of
+      // the outputs, we currently can't deal with this.
+      if (User->getOpcode() == ISD::SELECT) {
+        if (User->getOperand(0) == Inputs[i])
+          return SDValue();
+      } else if (User->getOpcode() == ISD::SELECT_CC) {
+        if (User->getOperand(0) == Inputs[i] ||
+            User->getOperand(1) == Inputs[i])
+          return SDValue();
+      }
     }
   }
 
@@ -7304,6 +7334,20 @@ SDValue PPCTargetLowering::DAGCombineTruncBoolExt(SDNode *N,
       SDNode *User = *UI;
       if (User != N && !Visited.count(User))
         return SDValue();
+
+      // Make sure that we're not going to promote the non-output-value
+      // operand(s) or SELECT or SELECT_CC.
+      // FIXME: Although we could sometimes handle this, and it does occur in
+      // practice that one of the condition inputs to the select is also one of
+      // the outputs, we currently can't deal with this.
+      if (User->getOpcode() == ISD::SELECT) {
+        if (User->getOperand(0) == PromOps[i])
+          return SDValue();
+      } else if (User->getOpcode() == ISD::SELECT_CC) {
+        if (User->getOperand(0) == PromOps[i] ||
+            User->getOperand(1) == PromOps[i])
+          return SDValue();
+      }
     }
   }
 
@@ -7391,8 +7435,6 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
   SelectionDAG &DAG = DCI.DAG;
   SDLoc dl(N);
 
-  assert(PPCSubTarget.useCRBits() &&
-         "Expecting to be tracking CR bits");
   // If we're tracking CR bits, we need to be careful that we don't have:
   //   zext(binary-ops(trunc(x), trunc(y)))
   // or
@@ -7402,11 +7444,19 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
   // bits are set as required by the final extension, we still may need to do
   // some masking to get the proper behavior.
 
+  // This same functionality is important on PPC64 when dealing with
+  // 32-to-64-bit extensions; these occur often when 32-bit values are used as
+  // the return values of functions. Because it is so similar, it is handled
+  // here as well.
+
   if (N->getValueType(0) != MVT::i32 &&
       N->getValueType(0) != MVT::i64)
     return SDValue();
 
-  if (N->getOperand(0).getValueType() != MVT::i1)
+  if (!((N->getOperand(0).getValueType() == MVT::i1 &&
+        PPCSubTarget.useCRBits()) ||
+       (N->getOperand(0).getValueType() == MVT::i32 &&
+        PPCSubTarget.isPPC64())))
     return SDValue();
 
   if (N->getOperand(0).getOpcode() != ISD::AND &&
@@ -7468,6 +7518,20 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
       SDNode *User = *UI;
       if (User != N && !Visited.count(User))
         return SDValue();
+
+      // Make sure that we're not going to promote the non-output-value
+      // operand(s) or SELECT or SELECT_CC.
+      // FIXME: Although we could sometimes handle this, and it does occur in
+      // practice that one of the condition inputs to the select is also one of
+      // the outputs, we currently can't deal with this.
+      if (User->getOpcode() == ISD::SELECT) {
+        if (User->getOperand(0) == Inputs[i])
+          return SDValue();
+      } else if (User->getOpcode() == ISD::SELECT_CC) {
+        if (User->getOperand(0) == Inputs[i] ||
+            User->getOperand(1) == Inputs[i])
+          return SDValue();
+      }
     }
   }
 
@@ -7478,9 +7542,24 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
       SDNode *User = *UI;
       if (User != N && !Visited.count(User))
         return SDValue();
+
+      // Make sure that we're not going to promote the non-output-value
+      // operand(s) or SELECT or SELECT_CC.
+      // FIXME: Although we could sometimes handle this, and it does occur in
+      // practice that one of the condition inputs to the select is also one of
+      // the outputs, we currently can't deal with this.
+      if (User->getOpcode() == ISD::SELECT) {
+        if (User->getOperand(0) == PromOps[i])
+          return SDValue();
+      } else if (User->getOpcode() == ISD::SELECT_CC) {
+        if (User->getOperand(0) == PromOps[i] ||
+            User->getOperand(1) == PromOps[i])
+          return SDValue();
+      }
     }
   }
 
+  unsigned PromBits = N->getOperand(0).getValueSizeInBits();
   bool ReallyNeedsExt = false;
   if (N->getOpcode() != ISD::ANY_EXTEND) {
     // If all of the inputs are not already sign/zero extended, then
@@ -7491,12 +7570,15 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
 
       unsigned OpBits =
         Inputs[i].getOperand(0).getValueSizeInBits();
+      assert(PromBits < OpBits && "Truncation not to a smaller bit count?");
+
       if ((N->getOpcode() == ISD::ZERO_EXTEND &&
            !DAG.MaskedValueIsZero(Inputs[i].getOperand(0),
-                                 APInt::getHighBitsSet(OpBits,
-                                                       OpBits-1))) ||
+                                  APInt::getHighBitsSet(OpBits,
+                                                        OpBits-PromBits))) ||
           (N->getOpcode() == ISD::SIGN_EXTEND &&
-           DAG.ComputeNumSignBits(Inputs[i].getOperand(0)) != OpBits)) {
+           DAG.ComputeNumSignBits(Inputs[i].getOperand(0)) <
+             (OpBits-(PromBits-1)))) {
         ReallyNeedsExt = true;
         break;
       }
@@ -7580,16 +7662,19 @@ SDValue PPCTargetLowering::DAGCombineExtBoolTrunc(SDNode *N,
   if (!ReallyNeedsExt)
     return N->getOperand(0);
 
-  // To zero extend, just mask off everything except for the first bit.
+  // To zero extend, just mask off everything except for the first bit (in the
+  // i1 case).
   if (N->getOpcode() == ISD::ZERO_EXTEND)
     return DAG.getNode(ISD::AND, dl, N->getValueType(0), N->getOperand(0),
-                       DAG.getConstant(1, N->getValueType(0)));
+                       DAG.getConstant(APInt::getLowBitsSet(
+                                         N->getValueSizeInBits(0), PromBits),
+                                       N->getValueType(0)));
 
   assert(N->getOpcode() == ISD::SIGN_EXTEND &&
          "Invalid extension type");
   EVT ShiftAmountTy = getShiftAmountTy(N->getValueType(0));
   SDValue ShiftCst =
-    DAG.getConstant(N->getValueSizeInBits(0)-1, ShiftAmountTy);
+    DAG.getConstant(N->getValueSizeInBits(0)-PromBits, ShiftAmountTy);
   return DAG.getNode(ISD::SRA, dl, N->getValueType(0), 
                      DAG.getNode(ISD::SHL, dl, N->getValueType(0),
                                  N->getOperand(0), ShiftCst), ShiftCst);
@@ -8227,6 +8312,8 @@ PPCTargetLowering::getConstraintType(const std::string &Constraint) const {
       // suboptimal.
       return C_Memory;
     }
+  } else if (Constraint == "wc") { // individual CR bits.
+    return C_RegisterClass;
   }
   return TargetLowering::getConstraintType(Constraint);
 }
@@ -8244,7 +8331,11 @@ PPCTargetLowering::getSingleConstraintMatchWeight(
   if (CallOperandVal == NULL)
     return CW_Default;
   Type *type = CallOperandVal->getType();
+
   // Look at the constraint type.
+  if (StringRef(constraint) == "wc" && type->isIntegerTy(1))
+    return CW_Register; // an individual CR bit.
+
   switch (*constraint) {
   default:
     weight = TargetLowering::getSingleConstraintMatchWeight(info, constraint);
@@ -8300,6 +8391,8 @@ PPCTargetLowering::getRegForInlineAsmConstraint(const std::string &Constraint,
     case 'y':   // crrc
       return std::make_pair(0U, &PPC::CRRCRegClass);
     }
+  } else if (Constraint == "wc") { // an individual CR bit.
+    return std::make_pair(0U, &PPC::CRBITRCRegClass);
   }
 
   std::pair<unsigned, const TargetRegisterClass*> R =

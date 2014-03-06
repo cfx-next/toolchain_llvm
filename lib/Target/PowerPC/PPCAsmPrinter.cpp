@@ -33,8 +33,8 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineModuleInfoImpls.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
-#include "llvm/DebugInfo.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
@@ -1135,4 +1135,5 @@ static AsmPrinter *createPPCAsmPrinterPass(TargetMachine &tm,
 extern "C" void LLVMInitializePowerPCAsmPrinter() { 
   TargetRegistry::RegisterAsmPrinter(ThePPC32Target, createPPCAsmPrinterPass);
   TargetRegistry::RegisterAsmPrinter(ThePPC64Target, createPPCAsmPrinterPass);
+  TargetRegistry::RegisterAsmPrinter(ThePPC64LETarget, createPPCAsmPrinterPass);
 }
