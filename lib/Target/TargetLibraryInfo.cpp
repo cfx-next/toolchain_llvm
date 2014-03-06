@@ -606,13 +606,6 @@ static void initialize(TargetLibraryInfo &TLI, const Triple &T,
   case Triple::Android:
     TLI.setAvailableWithName(LibFunc::exp10, "__exp10");
     TLI.setAvailableWithName(LibFunc::exp10f, "__exp10f");
-  case Triple::Linux:
-    // exp10, exp10f, exp10l is available on Linux (GLIBC) but are extremely
-    // buggy prior to glibc version 2.18. Until this version is widely deployed
-    // or we have a reasonable detection strategy, we cannot use exp10 reliably
-    // on Linux.
-    //
-    // Fall through to disable all of them.
   default:
     TLI.setUnavailable(LibFunc::exp10);
     TLI.setUnavailable(LibFunc::exp10f);
